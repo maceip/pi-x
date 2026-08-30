@@ -1,0 +1,44 @@
+{
+  "defaultProvider": "mtplx",
+  "defaultModel": "mtplx-flash-next-optimized-speed",
+  "defaultThinkingLevel": "high",
+  "modelThinkingLevels": {
+    "mtplx/mtplx-flash-next-optimized-speed": "high",
+    "mtplx/qwen3.8-flash-next-mlx-4bit": "high"
+  },
+  "defaultTools": [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls"
+  ],
+  "sessionDir": ".pi/sessions",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 8192,
+    "keepRecentTokens": 24000
+  },
+  "retry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 1000,
+    "provider": {
+      "timeoutMs": 300000,
+      "maxRetries": 0,
+      "maxRetryDelayMs": 30000
+    }
+  },
+  "extensions": [
+    ".pi/extensions/*.ts"
+  ],
+  "skills": [
+    ".pi/skills/*"
+  ],
+  "enableSkillCommands": true,
+  "tuiMode": "fullscreen",
+  "fullscreenExitOutput": "transcript",
+  "theme": "dark"
+}

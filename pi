@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Ensure node 24 and npm tools are on PATH
+export PATH="/Users/mac/.nvm/versions/node/v24.15.0/bin:${PATH}"
+
+PI_BIN="/Users/mac/.npm/_npx/99fca8174466655b/node_modules/.bin/pi"
+if [ ! -f "${PI_BIN}" ]; then
+    PI_BIN=$(which pi 2>/dev/null || find /Users/mac/.npm -name "pi" -type f -perm +111 2>/dev/null | head -n 1)
+fi
+
+if [ -z "${PI_BIN}" ] || [ ! -f "${PI_BIN}" ]; then
+    echo "Error: Pi binary not found." >&2
+    exit 1
+fi
+
+exec "${PI_BIN}" "$@"

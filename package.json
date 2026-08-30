@@ -1,0 +1,17 @@
+{
+  "name": "pi-workspace",
+  "version": "1.0.0",
+  "description": "High-Performance Local Coding Agent Environment powered by Pi and MTPLX",
+  "type": "module",
+  "scripts": {
+    "start": "./run_agent.sh",
+    "mtplx:start": "./start_mtplx.sh",
+    "mtplx:stop": "./stop_mtplx.sh",
+    "test": "./test_pi_setup.sh"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
