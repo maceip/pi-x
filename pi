@@ -1,17 +1,58 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ensure node 24 and npm tools are on PATH
-export PATH="/Users/mac/.nvm/versions/node/v24.15.0/bin:${PATH}"
+# Portable Pi CLI wrapper. Never hardcode a developer machine PATH.
 
-PI_BIN="/Users/mac/.npm/_npx/99fca8174466655b/node_modules/.bin/pi"
-if [ ! -f "${PI_BIN}" ]; then
-    PI_BIN=$(which pi 2>/dev/null || find /Users/mac/.npm -name "pi" -type f -perm +111 2>/dev/null | head -n 1)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR}/lib/preflight.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/lib/preflight.sh"
+    pi_x_bootstrap_path
 fi
 
-if [ -z "${PI_BIN}" ] || [ ! -f "${PI_BIN}" ]; then
-    echo "Error: Pi binary not found." >&2
+resolve_pi_bin() {
+    local cand
+    if [[ -n "${PI_BIN:-}" && -x "${PI_BIN}" ]]; then
+        printf '%s\n' "${PI_BIN}"
+        return 0
+    fi
+
+    # Prefer a real `pi` on PATH that is not this wrapper.
+    if cand="$(command -v pi 2>/dev/null || true)"; then
+        local resolved self
+        resolved="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$cand" 2>/dev/null || echo "$cand")"
+        self="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$0" 2>/dev/null || echo "$0")"
+        if [[ "$resolved" != "$self" && "$cand" != "${SCRIPT_DIR}/pi" ]]; then
+            printf '%s\n' "$cand"
+            return 0
+        fi
+    fi
+
+    # Common global npm prefixes
+    for cand in \
+        "$(npm prefix -g 2>/dev/null)/bin/pi" \
+        "${HOME}/.npm-global/bin/pi" \
+        /opt/homebrew/bin/pi \
+        /usr/local/bin/pi; do
+        if [[ -n "$cand" && -x "$cand" ]]; then
+            printf '%s\n' "$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+PI_REAL="$(resolve_pi_bin || true)"
+if [[ -z "${PI_REAL}" ]]; then
+    if command -v npx >/dev/null 2>&1; then
+        exec npx --yes @earendil-works/pi-coding-agent "$@"
+    fi
+    echo "Error: Pi CLI not found." >&2
+    echo "Install it with:" >&2
+    echo "  npm install -g --ignore-scripts @earendil-works/pi-coding-agent" >&2
+    echo "or:" >&2
+    echo "  curl -fsSL https://pi.dev/install.sh | sh" >&2
     exit 1
 fi
 
-exec "${PI_BIN}" "$@"
+exec "${PI_REAL}" "$@"

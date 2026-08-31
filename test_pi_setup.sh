@@ -2,6 +2,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PATH="/Users/mac/.nvm/versions/node/v24.15.0/bin:${PATH}"
+if [[ -f "${SCRIPT_DIR}/lib/preflight.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/lib/preflight.sh"
+    pi_x_bootstrap_path
+fi
 
-node --loader ts-node/esm "${SCRIPT_DIR}/test_pi_setup.ts" 2>/dev/null || node "${SCRIPT_DIR}/test_pi_setup.ts" 2>/dev/null || npx -y tsx "${SCRIPT_DIR}/test_pi_setup.ts"
+if command -v npx >/dev/null 2>&1; then
+    exec npx --yes tsx "${SCRIPT_DIR}/test_pi_setup.ts" "$@"
+fi
+
+node --loader ts-node/esm "${SCRIPT_DIR}/test_pi_setup.ts" "$@"

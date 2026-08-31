@@ -31,15 +31,39 @@ Measured live on Apple Silicon (M5 Max 128GB) running real autonomous multi-turn
 
 ---
 
+## Requirements
+
+This harness is built for large unified-memory Apple Silicon machines:
+
+- **More than 80GB total RAM** (the launcher exits politely below that)
+- **mtplx 2.10.1+** (discovered from a homedir `uv` venv first, then from system Python)
+- A **4-bit Qwen 3.8 Flash-Next** checkpoint, or the published speed fallback below
+
 ## Quick Start
 
-Copy and paste this into your terminal to start the Pi coding agent:
+Copy and paste this. It does not require a prior clone:
 
 ```bash
-cd /Users/mac/pi && ./run_agent.sh
+curl -fsSL https://raw.githubusercontent.com/maceip/pi-x/main/bootstrap.sh | bash
 ```
 
-*The launcher automatically verifies or starts the background MTPLX server with all acceleration flags, verifies port 8000 health, and drops you straight into the interactive agent TUI.*
+That command will:
+
+1. Clone this repo to `~/pi-x` if you are not already inside a checkout
+2. Refuse to continue on machines with 80GB of RAM or less
+3. Find `uv` and look for `mtplx` in a homedir uv venv; otherwise use a system/python `mtplx`
+4. Offer to install or upgrade `mtplx` if it is missing or older than **2.10.1**
+5. Search for a local 4-bit Qwen 3.8 Flash-Next model
+6. If none is found, offer to download [`Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed`](https://huggingface.co/Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed) with a progress bar
+7. Start MTPLX with the discovered or downloaded model and drop you into the Pi TUI
+
+Already cloned the repo? From the checkout:
+
+```bash
+./run_agent.sh
+```
+
+Override the clone destination with `PI_X_HOME=/somewhere/pi-x` if you do not want `~/pi-x`.
 
 ---
 
@@ -94,20 +118,22 @@ cd /Users/mac/pi && ./run_agent.sh
 | `MTPLX_QSA_PREFILL` | `1` | Flash / gathered QSA kernel execution |
 | `MTPLX_FUSED_*` | `1` | Fused Gate+Up, GDN in-proj, ConvNorm, Step, HC v3, and QSA indexer |
 | `MTPLX_ENGINE_RAM_FRACTION` | `0.90` | Allocate 90% of available memory envelope to engine |
-| `MTPLX_MEMORY_LIMIT_BYTES` | `118G` | Allocate up to 118GB unified memory budget |
-| `MTPLX_WIRED_LIMIT_BYTES` | `110G` | Metal wired memory ceiling |
+| `MTPLX_MEMORY_LIMIT_BYTES` | 90% of RAM | Unified memory budget, scaled to the host |
+| `MTPLX_WIRED_LIMIT_BYTES` | 85% of RAM | Metal wired memory ceiling, scaled to the host |
 
 ---
 
 ## Directory Layout
 
 ```
-/Users/mac/pi/
+pi-x/
+├── bootstrap.sh               # Copy-paste entry (clone-if-needed + launch)
 ├── run_agent.sh               # Main interactive TUI launcher
 ├── start_mtplx.sh             # Background accelerated server daemon
 ├── stop_mtplx.sh              # Clean process terminator
 ├── test_pi_setup.sh           # End-to-end verification suite
-├── pi                         # Executable Pi CLI wrapper
+├── lib/preflight.sh           # RAM / uv / mtplx / model discovery
+├── pi                         # Portable Pi CLI wrapper
 ├── package.json               # Node workspace manifest
 ├── tsconfig.json              # TypeScript configuration
 ├── logs/
