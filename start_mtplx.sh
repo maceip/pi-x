@@ -28,16 +28,39 @@ if [[ -f "${LOG_FILE}" ]]; then
     fi
 fi
 
-# 2. Check if already running
-if curl -s "http://${HOST}:${PORT}/health" >/dev/null 2>&1 || curl -s "http://${HOST}:${PORT}/v1/models" >/dev/null 2>&1; then
-    echo " [MTPLX] Server is already running on http://${HOST}:${PORT}"
+# 2. Check if MTPLX is already healthy on target port
+if curl -s "http://${HOST}:${PORT}/v1/models" 2>/dev/null | grep -qi "mtplx"; then
+    echo " [MTPLX] Server is already running and healthy on http://${HOST}:${PORT}"
     exit 0
 fi
 
-# 3. Clean up stale port binding
+# 3. Safe Port Conflict & Stale PID Resolution
 if command -v lsof >/dev/null 2>&1 && lsof -i ":${PORT}" >/dev/null 2>&1; then
-    kill -9 $(lsof -t -i ":${PORT}") 2>/dev/null || true
-    sleep 1
+    OCCUPIER_PID="$(lsof -t -i ":${PORT}" | head -n 1)"
+    SAVED_PID="$(cat "${PID_FILE}" 2>/dev/null || echo "")"
+
+    # Check if the process occupying the port is an mtplx process
+    if [[ "$OCCUPIER_PID" == "$SAVED_PID" ]] || ps -p "$OCCUPIER_PID" -o comm= 2>/dev/null | grep -qiE "mtplx|python"; then
+        echo " [MTPLX] Cleaning up previous MTPLX process (PID ${OCCUPIER_PID}) on port ${PORT}..."
+        kill -9 "$OCCUPIER_PID" 2>/dev/null || true
+        sleep 1
+    else
+        # Port is occupied by an unrelated user process (e.g. Vite, Ollama). Find next available port.
+        ORIG_PORT="$PORT"
+        while command -v lsof >/dev/null 2>&1 && lsof -i ":${PORT}" >/dev/null 2>&1; do
+            PORT=$((PORT + 1))
+        done
+        echo " [MTPLX] Notice: Port ${ORIG_PORT} is in use by another application. Binding to port ${PORT} instead."
+        export MTPLX_PORT="$PORT"
+    fi
+fi
+
+# Clean stale PID file if process no longer exists
+if [[ -f "${PID_FILE}" ]]; then
+    OLD_PID="$(cat "${PID_FILE}" 2>/dev/null || echo "")"
+    if [[ -n "$OLD_PID" ]] && ! kill -0 "$OLD_PID" 2>/dev/null; then
+        rm -f "${PID_FILE}"
+    fi
 fi
 
 echo " [MTPLX] Launching ${MTPLX_MODEL_ID:-mtplx-flash-next-optimized-speed} on port ${PORT}..."

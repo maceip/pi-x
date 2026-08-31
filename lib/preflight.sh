@@ -36,6 +36,18 @@ pi_x_total_ram_bytes() {
 }
 
 pi_x_require_ram() {
+    # Check for Rosetta 2 translation on Apple Silicon
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        local translated=0
+        translated="$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)"
+        if [[ "$translated" == "1" || "$(uname -m)" == "x86_64" ]]; then
+            if [[ "$(sysctl -n machdep.cpu.brand_string 2>/dev/null)" =~ Apple ]]; then
+                pi_x_log "Detected x86_64/Rosetta process on Apple Silicon. Relaunching in native arm64..."
+                exec arch -arm64 bash "$0" "$@"
+            fi
+        fi
+    fi
+
     local bytes gb
     bytes="$(pi_x_total_ram_bytes)"
     gb=$((bytes / 1024 / 1024 / 1024))
@@ -59,6 +71,23 @@ pi_x_bootstrap_path() {
     pi_x_prepend_path "${HOME}/.local/bin"
     pi_x_prepend_path "/opt/homebrew/bin"
     pi_x_prepend_path "/usr/local/bin"
+    pi_x_prepend_path "${HOME}/.bun/bin"
+    pi_x_prepend_path "${HOME}/.volta/bin"
+    pi_x_prepend_path "${HOME}/.asdf/shims"
+    pi_x_prepend_path "${HOME}/.asdf/bin"
+    pi_x_prepend_path "${HOME}/.local/share/mise/shims"
+    pi_x_prepend_path "${HOME}/.local/share/mise/bin"
+    pi_x_prepend_path "${HOME}/.proto/shims"
+    pi_x_prepend_path "${HOME}/.proto/bin"
+    pi_x_prepend_path "${HOME}/.local/share/fnm/current/bin"
+    pi_x_prepend_path "${HOME}/.fnm/current/bin"
+
+    # Homebrew Node formulas
+    for brew_node in /opt/homebrew/opt/node /opt/homebrew/opt/node@* /usr/local/opt/node /usr/local/opt/node@*; do
+        [[ -d "${brew_node}/bin" ]] && pi_x_prepend_path "${brew_node}/bin"
+    done
+
+    # NVM node versions
     if [[ -d "${HOME}/.nvm/versions/node" ]]; then
         local latest
         latest="$(ls -1d "${HOME}/.nvm/versions/node"/v* 2>/dev/null | sort -V | tail -n 1 || true)"
@@ -172,17 +201,61 @@ pi_x_require_mtplx() {
 
 pi_x_dir_looks_like_model() {
     local dir="$1"
-    if [[ ! -d "$dir" ]] || [[ ! -f "${dir}/config.json" && ! -f "${dir}/mtplx_runtime.json" ]]; then
+    [[ -d "$dir" ]] || return 1
+
+    local cfg="${dir}/config.json"
+    if [[ ! -f "$cfg" && ! -f "${dir}/mtplx_runtime.json" && ! -f "${dir}/params.json" ]]; then
         return 1
     fi
-    compgen -G "${dir}/*.safetensors" >/dev/null 2>&1 || compgen -G "${dir}/model-*.safetensors" >/dev/null 2>&1
+
+    # Check for weights directly or via symlink in snapshots
+    if compgen -G "${dir}/*.safetensors" >/dev/null 2>&1 || \
+       compgen -G "${dir}/model-*.safetensors" >/dev/null 2>&1 || \
+       compgen -G "${dir}/mtp/*.safetensors" >/dev/null 2>&1 || \
+       [[ -f "${dir}/model.safetensors.index.json" ]] || \
+       compgen -G "${dir}/*.bin" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Check for symlinked files (common in HF hub snapshots)
+    if [[ -d "${dir}" ]] && find -L "${dir}" -maxdepth 2 -name "*.safetensors" 2>/dev/null | grep -q .; then
+        return 0
+    fi
+
+    return 1
+}
+
+pi_x_model_config_is_compatible() {
+    local dir="$1"
+    local cfg="${dir}/config.json"
+    [[ -f "$cfg" ]] || return 1
+
+    # Check model_type or architectures in config.json
+    local model_type="" arch=""
+    model_type="$(grep -Eo '"model_type"\s*:\s*"[^"]+"' "$cfg" 2>/dev/null | cut -d'"' -f4 | tr '[:upper:]' '[:lower:]' || true)"
+    arch="$(grep -Eo '"architectures"\s*:\s*\[\s*"[^"]+"' "$cfg" 2>/dev/null | cut -d'"' -f4 | tr '[:upper:]' '[:lower:]' || true)"
+
+    if [[ "$model_type" =~ (qwen4_exp|qwen3_8|qwen3\.8|qwen3_6|qwen2_5|qwen2) ]] || \
+       [[ "$arch" =~ (qwen3_8|qwen4exp|qwen2) ]]; then
+        return 0
+    fi
+    return 1
 }
 
 pi_x_name_is_flash_next_4bit() {
-    local lower="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
-    [[ "$lower" == *qwen3.8* && "$lower" == *flash* && "$lower" == *next* ]] || \
-    [[ "$lower" == *qwen3-8*flash*next* || "$lower" == *qwen3.8-flash-next* ]] || \
-    [[ "$lower" == *qwen3.6-27b-mtplx-optimized-speed* ]]
+    local dir_or_name="$1"
+    local lower="$(printf '%s' "$(basename "$dir_or_name")" | tr '[:upper:]' '[:lower:]')"
+
+    if [[ "$lower" == *qwen3.8* && "$lower" == *flash* && "$lower" == *next* ]] || \
+       [[ "$lower" == *qwen3-8*flash*next* || "$lower" == *qwen3.8-flash-next* ]] || \
+       [[ "$lower" == *qwen3.6-27b-mtplx-optimized-speed* ]]; then
+        return 0
+    fi
+
+    if [[ -d "$dir_or_name" ]] && pi_x_model_config_is_compatible "$dir_or_name"; then
+        return 0
+    fi
+    return 1
 }
 
 pi_x_discover_model() {
@@ -192,18 +265,31 @@ pi_x_discover_model() {
 
     local roots=(
         "${HOME}/models" "${HOME}/Models" "${HOME}/.mtplx/models"
-        "${HOME}/.cache/huggingface/hub" "${PI_X_ROOT:-}/models" "${PWD}/models"
+        "${HF_HOME:-${HOME}/.cache/huggingface}/hub"
+        "${HF_HUB_CACHE:-}"
+        "${XDG_CACHE_HOME:-${HOME}/.cache}/huggingface/hub"
+        "${PI_X_ROOT:-}/models" "${PWD}/models"
     )
+
+    # Also check attached /Volumes external drives
+    shopt -s nullglob
+    for ext in /Volumes/*/models /Volumes/*/cache/huggingface/hub; do
+        [[ -d "$ext" ]] && roots+=("$ext")
+    done
+    shopt -u nullglob
+
     for root in "${roots[@]}"; do
-        if [[ -d "$root" ]]; then
+        if [[ -n "$root" && -d "$root" ]]; then
             for child in "$root"/*; do
                 local base="$(basename "$child")"
-                if pi_x_name_is_flash_next_4bit "$base"; then
-                    if pi_x_dir_looks_like_model "$child"; then
-                        MODEL_PATH="$child"
-                        return 0
-                    fi
-                    for snap in "$child"/snapshots/*; do
+                # Direct folder check
+                if pi_x_dir_looks_like_model "$child" && pi_x_name_is_flash_next_4bit "$child"; then
+                    MODEL_PATH="$child"
+                    return 0
+                fi
+                # Hugging Face hub snapshot check
+                if [[ -d "${child}/snapshots" ]] && pi_x_name_is_flash_next_4bit "$base"; then
+                    for snap in "${child}/snapshots"/*; do
                         if pi_x_dir_looks_like_model "$snap"; then
                             MODEL_PATH="$snap"
                             return 0
@@ -297,6 +383,20 @@ pi_x_require_model() {
     exit 1
 }
 
+pi_x_verify_mtplx_runtime() {
+    local py="python3"
+    if [[ -n "${MTPLX_BIN:-}" && -x "$(dirname "$MTPLX_BIN")/python" ]]; then
+        py="$(dirname "$MTPLX_BIN")/python"
+    fi
+
+    if ! "$py" -c "import mtplx; import mlx.core" 2>/dev/null; then
+        pi_x_err "Warning: Python runtime at ${py} failed to import mlx.core or mtplx."
+        if pi_x_ask "Attempt automatic virtualenv repair with uv/pip? [y/N] "; then
+            pi_x_install_or_upgrade_mtplx "repair"
+        fi
+    fi
+}
+
 pi_x_preflight() {
     local root="${PI_X_ROOT:-$(pwd)}"
     if [[ -f "${root}/config.env" ]]; then
@@ -305,6 +405,7 @@ pi_x_preflight() {
     pi_x_bootstrap_path
     pi_x_require_ram
     pi_x_require_mtplx
+    pi_x_verify_mtplx_runtime
     pi_x_require_model
     export MODEL_PATH MTPLX_BIN MTPLX_SOURCE MTPLX_VERSION
 }

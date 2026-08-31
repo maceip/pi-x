@@ -25,7 +25,12 @@ resolve_pi() {
         fi
     fi
 
-    for p in "$(npm prefix -g 2>/dev/null)/bin/pi" "${HOME}/.npm-global/bin/pi" /opt/homebrew/bin/pi /usr/local/bin/pi; do
+    for p in \
+        "$(npm prefix -g 2>/dev/null || true)/bin/pi" \
+        "${HOME}/.npm-global/bin/pi" \
+        "${HOME}/.bun/bin/pi" \
+        /opt/homebrew/bin/pi \
+        /usr/local/bin/pi; do
         if [[ -n "$p" && -x "$p" ]]; then
             echo "$p"
             return 0
@@ -39,7 +44,13 @@ if [[ -n "$PI_EXEC" ]]; then
     exec "$PI_EXEC" "$@"
 elif command -v npx >/dev/null 2>&1; then
     exec npx --yes @earendil-works/pi-coding-agent "$@"
+elif command -v bunx >/dev/null 2>&1; then
+    exec bunx @earendil-works/pi-coding-agent "$@"
 else
-    echo "Error: Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent" >&2
+    echo " [pi-x] ERROR: Node.js / npx not found in PATH." >&2
+    echo " [pi-x] Please install Node.js (or Bun) using your package manager:" >&2
+    echo "        brew install node" >&2
+    echo "        # or: curl -fsSL https://bun.sh/install | bash" >&2
+    echo "        # or: npm install -g @earendil-works/pi-coding-agent" >&2
     exit 1
 fi

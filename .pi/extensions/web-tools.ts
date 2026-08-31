@@ -1,6 +1,6 @@
 /**
  * Web Tools Extension for Pi Agent
- * Registers web_search (DuckDuckGo keyless, Tavily, Brave) & web_fetch (HTML to Markdown).
+ * Registers web_search (DuckDuckGo keyless, Tavily, Brave, Wikipedia) & web_fetch (HTML to Markdown).
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -41,11 +41,23 @@ function htmlToMarkdown(html: string): string {
 interface SearchResult { title: string; url: string; snippet: string; }
 
 async function searchDuckDuckGo(query: string, limit: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  const timeoutSig = AbortSignal.timeout(10000);
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSig]) : timeoutSig;
+
   const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-    headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/126.0.0.0 Safari/537.36" },
-    signal,
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    signal: combinedSignal,
   });
+
+  if (resp.status === 202 || resp.status === 403 || resp.status === 429) {
+    throw new Error("DuckDuckGo rate limit or anti-bot challenge encountered");
+  }
   if (!resp.ok) throw new Error(`DuckDuckGo HTTP ${resp.status}`);
+
   const html = await resp.text();
   const results: SearchResult[] = [];
   const blocks = html.split(/<div\s+class="[^"]*result\s+results_links[^"]*"[^>]*>/i).slice(1);
@@ -67,6 +79,15 @@ async function searchDuckDuckGo(query: string, limit: number, signal?: AbortSign
   return results;
 }
 
+async function searchWikipediaFallback(query: string, limit: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  const url = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=${limit}&namespace=0&format=json`;
+  const resp = await fetch(url, { signal: signal || AbortSignal.timeout(8000) });
+  if (!resp.ok) return [];
+  const data = (await resp.json()) as [string, string[], string[], string[]];
+  const titles = data[1] || [], snippets = data[2] || [], urls = data[3] || [];
+  return titles.map((title, i) => ({ title, snippet: snippets[i] || "", url: urls[i] || "" }));
+}
+
 export default function webToolsExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_search",
@@ -81,16 +102,28 @@ export default function webToolsExtension(pi: ExtensionAPI) {
       const limit = Math.min(Math.max(params.limit || 6, 1), 15);
       if (!query) return { content: [{ type: "text", text: "Error: Query cannot be empty." }] };
 
+      let results: SearchResult[] = [];
+      let provider = "DuckDuckGo";
+
       try {
-        const results = await searchDuckDuckGo(query, limit, signal);
-        if (results.length === 0) return { content: [{ type: "text", text: `No results found for "${query}".` }] };
-        const text = `### Web Search Results for "${query}"\n\n` + results.map((r, i) =>
-          `**${i + 1}. [${r.title}](${r.url})**\n${r.snippet}\n`
-        ).join("\n");
-        return { content: [{ type: "text", text }] };
+        results = await searchDuckDuckGo(query, limit, signal);
       } catch (err: any) {
-        return { content: [{ type: "text", text: `Search failed: ${err.message}` }] };
+        try {
+          results = await searchWikipediaFallback(query, limit, signal);
+          provider = "Wikipedia Fallback";
+        } catch { /* ignore fallback error */ }
+
+        if (results.length === 0) {
+          return { content: [{ type: "text", text: `Search unavailable (${err.message}). Proceed using internal model knowledge or specific URLs with web_fetch.` }] };
+        }
       }
+
+      if (results.length === 0) return { content: [{ type: "text", text: `No results found for "${query}".` }] };
+
+      const text = `### Web Search Results (${provider}) for "${query}"\n\n` + results.map((r, i) =>
+        `**${i + 1}. [${r.title}](${r.url})**\n${r.snippet}\n`
+      ).join("\n");
+      return { content: [{ type: "text", text }] };
     },
   });
 
@@ -108,9 +141,15 @@ export default function webToolsExtension(pi: ExtensionAPI) {
       if (!/^https?:\/\//i.test(targetUrl)) return { content: [{ type: "text", text: "Error: URL must begin with http:// or https://" }] };
 
       try {
+        const timeoutSig = AbortSignal.timeout(15000);
+        const combinedSignal = signal ? AbortSignal.any([signal, timeoutSig]) : timeoutSig;
+
         const resp = await fetch(targetUrl, {
-          headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/126.0.0.0 Safari/537.36" },
-          signal,
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          },
+          signal: combinedSignal,
         });
         if (!resp.ok) return { content: [{ type: "text", text: `HTTP error ${resp.status}: ${resp.statusText}` }] };
         const md = htmlToMarkdown(await resp.text());

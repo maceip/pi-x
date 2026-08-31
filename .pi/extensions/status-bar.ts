@@ -96,21 +96,31 @@ export default function statusBarExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     ctx.ui.setFooter((tui, theme, footerData) => {
       requestRenderFn = () => tui.requestRender();
-      const unsub = footerData.onBranchChange(() => tui.requestRender());
+      let unsub = () => {};
+      try {
+        if (footerData && typeof footerData.onBranchChange === "function") {
+          unsub = footerData.onBranchChange(() => tui.requestRender());
+        }
+      } catch { /* non-git fallback */ }
+
       const timer = setInterval(() => { updateTelemetryAsync(); tui.requestRender(); }, 2500);
 
       return {
         dispose() { unsub(); clearInterval(timer); requestRenderFn = null; },
         invalidate() {},
         render(width: number): string[] {
+          if (!width || width < 25) return [truncateToWidth(theme.bold("pi-x"), Math.max(1, width))];
+
           let promptTokens = 0, completionTokens = 0;
-          const branch = ctx.sessionManager.getBranch();
-          for (let i = branch.length - 1; i >= 0; i--) {
-            if (branch[i].type === "message" && branch[i].message.role === "assistant") {
-              const u = (branch[i].message as AssistantMessage).usage;
-              if (u) { promptTokens = u.input || 0; completionTokens = u.output || 0; break; }
+          try {
+            const branch = ctx.sessionManager?.getBranch?.() || [];
+            for (let i = branch.length - 1; i >= 0; i--) {
+              if (branch[i].type === "message" && branch[i].message.role === "assistant") {
+                const u = (branch[i].message as AssistantMessage).usage;
+                if (u) { promptTokens = u.input || 0; completionTokens = u.output || 0; break; }
+              }
             }
-          }
+          } catch { /* session branch fallback */ }
 
           const currentTokens = promptTokens + completionTokens + (isGenerating ? turnTokensGenerated : 0);
           const maxContext = ctx.model?.contextWindow || 65536;
@@ -119,24 +129,29 @@ export default function statusBarExtension(pi: ExtensionAPI) {
 
           const getColored = (r: number, s: string) => r >= 0.88 ? theme.fg("error", s) : r >= 0.7 ? theme.fg("warning", s) : theme.fg("accent", s);
 
-          const isCompact = width < 95, isUltra = width < 75;
-          const barW = isUltra ? 4 : isCompact ? 6 : 8;
+          const isCompact = width < 95, isUltra = width < 75, isTiny = width < 50;
+          const barW = isTiny ? 3 : isUltra ? 4 : isCompact ? 6 : 8;
 
           const thrm = cachedThermalWarning ? " " + theme.fg("warning", cachedThermalWarning) : "";
-          const ramDetails = isUltra ? `${memPct}%` : isCompact ? `${Math.round(cachedWiredBytes / 1073741824)}G (${memPct}%)${thrm}` : `${fmtGB(cachedWiredBytes)}/${fmtGB(TOTAL_MEM_BYTES)} (${memPct}%)${thrm}`;
+          const ramDetails = isTiny ? `${memPct}%` : isUltra ? `${memPct}%${thrm}` : isCompact ? `${Math.round(cachedWiredBytes / 1073741824)}G (${memPct}%)${thrm}` : `${fmtGB(cachedWiredBytes)}/${fmtGB(TOTAL_MEM_BYTES)} (${memPct}%)${thrm}`;
           const ramText = theme.bold("RAM ") + getColored(memRatio, renderDetailedBar(memRatio, barW)) + " " + ramDetails;
 
-          const ctxDetails = isUltra ? `${ctxPct}%` : isCompact ? `${fmtTokens(currentTokens)} (${ctxPct}%)` : `${fmtTokens(currentTokens)}/${fmtTokens(maxContext)} (${ctxPct}%)`;
+          const ctxDetails = isTiny ? `${ctxPct}%` : isUltra ? `${ctxPct}%` : isCompact ? `${fmtTokens(currentTokens)} (${ctxPct}%)` : `${fmtTokens(currentTokens)}/${fmtTokens(maxContext)} (${ctxPct}%)`;
           const ctxText = theme.bold("CTX ") + getColored(ctxRatio, renderDetailedBar(ctxRatio, barW)) + " " + ctxDetails;
 
+          const speedVal = isGenerating ? currentLiveTokS : (lastTurnAvgTokS || 0);
           const speedStr = isGenerating
-            ? theme.bold(theme.fg("accent", `↯ ${currentLiveTokS > 0 ? currentLiveTokS.toFixed(1) : "--.-"} t/s`))
-            : lastTurnAvgTokS !== null && lastTurnAvgTokS > 0
-              ? theme.bold(`↯ ${lastTurnAvgTokS.toFixed(1)} t/s`)
+            ? theme.bold(theme.fg("accent", `↯ ${speedVal > 0 ? speedVal.toFixed(1) : "--.-"} t/s`))
+            : speedVal > 0
+              ? theme.bold(`↯ ${speedVal.toFixed(1)} t/s`)
               : theme.fg("dim", `↯ --.- t/s`);
 
-          const gitBranch = footerData.getGitBranch();
-          const gitStr = !isCompact && gitBranch ? theme.fg("dim", ` (${gitBranch})`) : "";
+          let gitStr = "";
+          try {
+            const gitBranch = footerData?.getGitBranch?.();
+            if (!isCompact && gitBranch) gitStr = theme.fg("dim", ` (${gitBranch})`);
+          } catch { /* git branch not available */ }
+
           let modelLabel = isCompact ? "Flash-Next" : "Flash-Next (65k)";
           const rawId = ctx.model?.id || "";
           if (rawId && !rawId.includes("flash-next") && !rawId.includes("qwen")) {
@@ -144,7 +159,15 @@ export default function statusBarExtension(pi: ExtensionAPI) {
           }
           const modelStr = isUltra ? "" : theme.bold(modelLabel) + gitStr;
           const sep = theme.fg("dim", " │ ");
-          const fullLine = modelStr ? `${ramText}${sep}${ctxText}${sep}${speedStr}${sep}${modelStr}` : `${ramText}${sep}${ctxText}${sep}${speedStr}`;
+
+          let fullLine = "";
+          if (isTiny) {
+            fullLine = `${ramText}${sep}${ctxText}`;
+          } else if (modelStr) {
+            fullLine = `${ramText}${sep}${ctxText}${sep}${speedStr}${sep}${modelStr}`;
+          } else {
+            fullLine = `${ramText}${sep}${ctxText}${sep}${speedStr}`;
+          }
 
           const vW = visibleWidth(fullLine);
           return [truncateToWidth(vW < width ? fullLine + " ".repeat(width - vW) : fullLine, width)];
