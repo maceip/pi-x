@@ -56,9 +56,9 @@ nohup "${CMD[@]}" \
     --context-window "${MTPLX_CONTEXT_WINDOW:-65536}" \
     --profile "${MTPLX_PROFILE:-turbo}" \
     --depth "${MTPLX_MTP_DEPTH:-3}" \
-    --reasoning "${MTPLX_REASONING:-on}" \
+    --reasoning "${MTPLX_REASONING:-off}" \
     --reasoning-parser "${MTPLX_REASONING_PARSER:-qwen3}" \
-    --reasoning-effort "${MTPLX_REASONING_EFFORT:-high}" \
+    --reasoning-effort "${MTPLX_REASONING_EFFORT:-low}" \
     --ssd-session-cache "${MTPLX_SSD_SESSION_CACHE:-off}" \
     --ssd-session-cache-min-prefix-tokens "${MTPLX_SSD_MIN_PREFIX_TOKENS:-512}" \
     --no-auth --unsafe-force-unverified --yes \

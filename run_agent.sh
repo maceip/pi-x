@@ -63,11 +63,11 @@ echo "$$" > "${LOCK_FILE}"
 trap 'rm -f "${LOCK_FILE}"' EXIT INT TERM
 
 echo " [Pi Launcher] Launching Pi Coding Agent with MTPLX..."
-echo " [Pi Launcher] Model: ${MODEL_PATH} | Thinking: ${PI_THINKING:-high}"
+echo " [Pi Launcher] Model: ${MODEL_PATH} | Thinking: ${PI_THINKING:-off}"
 
 exec "${SCRIPT_DIR}/pi" \
     --provider mtplx \
     --model "${PI_MODEL:-mtplx-flash-next-optimized-speed}" \
-    --thinking "${PI_THINKING:-high}" \
+    --thinking "${PI_THINKING:-off}" \
     --tui-mode "${PI_TUI_MODE:-fullscreen}" \
     "$@"

@@ -27,7 +27,8 @@
             "xhigh": "xhigh"
           },
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "contextWindow": 65536,
           "cost": {
@@ -50,7 +51,8 @@
             "xhigh": "xhigh"
           },
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "contextWindow": 65536,
           "cost": {

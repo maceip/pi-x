@@ -1,10 +1,10 @@
 {
   "defaultProvider": "mtplx",
   "defaultModel": "mtplx-flash-next-optimized-speed",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "off",
   "modelThinkingLevels": {
-    "mtplx/mtplx-flash-next-optimized-speed": "high",
-    "mtplx/qwen3.8-flash-next-mlx-4bit": "high"
+    "mtplx/mtplx-flash-next-optimized-speed": "off",
+    "mtplx/qwen3.8-flash-next-mlx-4bit": "off"
   },
   "defaultTools": [
     "read",
