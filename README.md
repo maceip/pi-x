@@ -6,6 +6,9 @@
 pi agent optimized for [mtplx](https://github.com/youssofal/MTPLX) local coding
 
 ---
+<p align="center">
+<img width="534" height="320" alt="lv_0_20260830213708" src="https://github.com/user-attachments/assets/b50ec69d-45c8-4775-a045-a3c4ce56546b" />
+</p>
 
 ## Interactive Agent Session Decode Speed
 
