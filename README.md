@@ -25,9 +25,10 @@ Measured live on Apple Silicon (M5 Max 128GB) running real autonomous multi-turn
 ## What We Added & Changed
 
 - **Metal Acceleration & Turbo Runtime:** Configured the MTPLX backend with Stage-1 `mx.compile`, double-buffered async token decode (`MTPLX_SYNC_AR=0`), pipelined AR, and optimal unified memory allocation for Apple Silicon.
-- **High-Precision Single-Row Status Rail:** Added a custom TUI extension that renders live Wired RAM, context usage (65.5k cap), and real-time generation speed (`tok/s`) using Unicode fractional blocks without taking extra vertical screen space.
+- **High-Precision Single-Row Status Rail:** Added a custom TUI extension that renders live Wired RAM, context usage (65.5k cap), real-time generation speed (`tok/s`), and background thermal telemetry using Unicode fractional blocks without taking extra vertical screen space.
 - **Autonomous Tooling & Keyless Web Search:** Integrated local filesystem tools (`read`, `write`, `edit`, `bash`, `grep`, `find`) with multi-provider web search (DuckDuckGo keyless scraper / Tavily / Brave) and token-budgeted HTML-to-Markdown web fetch.
 - **Specialized Engineering Skills:** Added modular agent skills for strict TypeScript architecture, D3.js v7+ visualization pipelines (`selection.join`, transitions), and browser/Canvas application engineering.
+- **Durability & Session Management:** Added single-instance process locking, unified `config.env` tuning, automatic 50MB log rotation, and session continuation/pruning flags (`-c`, `-r`, `--clean`, `--status`).
 
 ---
 
@@ -81,6 +82,12 @@ Override the clone destination with `PI_X_HOME=/somewhere/pi-x` if you do not wa
 # Open the interactive session picker
 ./run_agent.sh -r
 
+# View live system status, active server PID, and model routing
+./run_agent.sh --status
+
+# Prune old conversation session files
+./run_agent.sh --clean
+
 # Run without loading skills (raw baseline)
 ./run_agent.sh --no-skills
 ```
@@ -88,8 +95,11 @@ Override the clone destination with `PI_X_HOME=/somewhere/pi-x` if you do not wa
 ### 2. Server Management & Diagnostics
 
 ```bash
-# Manually start or restart the background MTPLX server
+# Manually start the background MTPLX server (with auto log rotation)
 ./start_mtplx.sh
+
+# Restart the background MTPLX server
+./run_agent.sh --restart
 
 # Gracefully stop the MTPLX server
 ./stop_mtplx.sh
@@ -101,6 +111,26 @@ Override the clone destination with `PI_X_HOME=/somewhere/pi-x` if you do not wa
 ---
 
 ## Architecture & Configuration
+
+### Unified Configuration (`config.env`)
+All server acceleration, context limits, reasoning effort, and agent bells can be configured centrally in `config.env`:
+
+```bash
+# Server & Model Routing
+MTPLX_PORT=8000
+MTPLX_CONTEXT_WINDOW=65536
+MTPLX_PROFILE=turbo
+MTPLX_MTP_DEPTH=3
+
+# Reasoning
+MTPLX_REASONING=on
+MTPLX_REASONING_EFFORT=high
+
+# Agent UX
+PI_ENABLE_BELL=1
+PI_BELL_THRESHOLD_S=15
+PI_MAX_LOG_SIZE_MB=50
+```
 
 ### Context Window & Decode Sizing
 - **Configured Context Window**: **65,536 tokens** (`--context-window 65536`).
@@ -128,23 +158,25 @@ Override the clone destination with `PI_X_HOME=/somewhere/pi-x` if you do not wa
 ```
 pi-x/
 ├── bootstrap.sh               # Copy-paste entry (clone-if-needed + launch)
-├── run_agent.sh               # Main interactive TUI launcher
-├── start_mtplx.sh             # Background accelerated server daemon
+├── run_agent.sh               # Main interactive TUI launcher with CLI shortcuts
+├── start_mtplx.sh             # Background accelerated server daemon with log rotation
 ├── stop_mtplx.sh              # Clean process terminator
 ├── test_pi_setup.sh           # End-to-end verification suite
-├── lib/preflight.sh           # RAM / uv / mtplx / model discovery
+├── config.env                 # Centralized user-editable configuration
+├── lib/preflight.sh           # RAM / uv / mtplx / model discovery & host scaling
 ├── pi                         # Portable Pi CLI wrapper
 ├── package.json               # Node workspace manifest
 ├── tsconfig.json              # TypeScript configuration
 ├── logs/
-│   ├── mtplx.log              # Server logs
-│   └── mtplx.pid              # Active server PID
+│   ├── mtplx.log              # Server logs (auto-rotated at 50MB)
+│   ├── mtplx.pid              # Active server PID
+│   └── agent.lock             # Single-instance process lock
 └── .pi/
     ├── settings.json          # Agent settings (model, default tools, compaction, thinking)
     ├── models.json            # Model provider definitions (MTPLX endpoint & capabilities)
     ├── sessions/              # Persistent conversation history files
     ├── extensions/
-    │   ├── status-bar.ts      # Single-row high-precision Unicode status rail (RAM, CTX, tok/s)
+    │   ├── status-bar.ts      # Status rail (RAM, CTX, tok/s, thermal warning, bell alert)
     │   └── web-tools.ts       # web_search & web_fetch extensions
     └── skills/
         ├── typescript-expert/ # TypeScript strict engineering skill

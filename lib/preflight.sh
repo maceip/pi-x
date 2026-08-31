@@ -422,8 +422,15 @@ pi_x_download_fallback_model() {
         fi
     fi
 
+    local py="python3"
+    if [[ -n "${MTPLX_BIN:-}" && -x "$(dirname "$MTPLX_BIN")/python" ]]; then
+        py="$(dirname "$MTPLX_BIN")/python"
+    elif [[ "$HAS_UV" == "yes" ]]; then
+        py="uv run python"
+    fi
+
     mkdir -p "$dest"
-    python3 - "$PI_X_FALLBACK_MODEL_REPO" "$dest" <<'PY'
+    $py - "$PI_X_FALLBACK_MODEL_REPO" "$dest" <<'PY'
 import sys
 from pathlib import Path
 
@@ -473,6 +480,11 @@ pi_x_require_model() {
 }
 
 pi_x_preflight() {
+    local root="${PI_X_ROOT:-$(pwd)}"
+    if [[ -f "${root}/config.env" ]]; then
+        # shellcheck disable=SC1090
+        source "${root}/config.env"
+    fi
     pi_x_bootstrap_path
     pi_x_require_ram
     pi_x_require_mtplx

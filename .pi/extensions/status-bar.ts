@@ -3,11 +3,12 @@
  *
  * Features:
  * - Clean high-resolution sub-character Unicode progress bars (8th-block steps: ▏▎▍▌▋▊▉█)
- * - No outline brackets / border enclosures for a sleek, modern, uncluttered look
  * - macOS System Wired Memory / Total Memory (accurate scaling & color coding)
- * - Context Length Used / Total Context Window (65,536 tokens)
- * - Live token decode speed (tok/s) with on-tick updates during generation & turn averages
- * - Model ID & active Git branch
+ * - Context Length Used / Total Context Window (65,536 tokens) with live streaming updates
+ * - Live token decode speed (↯ tok/s) with on-tick updates during generation & turn averages
+ * - Background thermal pressure polling & warning indicator (🔥THRM)
+ * - Long-turn completion terminal bell alert (>15s by default, configurable)
+ * - Model ID, active Git branch, and responsive terminal width compaction
  * - Strictly single-row height
  */
 
@@ -17,20 +18,21 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import * as os from "node:os";
 
-// System total memory
+// System total memory & page size
 let TOTAL_MEM_BYTES = os.totalmem() || 128 * 1024 * 1024 * 1024;
 let PAGE_SIZE_BYTES = 16384;
 
-// Track wired memory asynchronously in background without blocking render loop
+// Track wired memory and thermal status asynchronously in background
 let cachedWiredBytes = 0;
-let isPollingMemory = false;
+let cachedThermalWarning = "";
+let isPollingTelemetry = false;
 
-function updateWiredMemoryAsync() {
-  if (isPollingMemory) return;
-  isPollingMemory = true;
+function updateTelemetryAsync() {
+  if (isPollingTelemetry) return;
+  isPollingTelemetry = true;
 
+  // 1. Poll wired memory pages
   execFile("vm_stat", [], { timeout: 1500 }, (err, stdout) => {
-    isPollingMemory = false;
     if (!err && stdout) {
       const match = stdout.match(/Pages wired down:\s+(\d+)\./);
       if (match) {
@@ -38,17 +40,35 @@ function updateWiredMemoryAsync() {
         cachedWiredBytes = pages * PAGE_SIZE_BYTES;
       }
     }
+
+    // 2. Poll macOS thermal state
+    execFile("pmset", ["-g", "therm"], { timeout: 1500 }, (tErr, tStdout) => {
+      isPollingTelemetry = false;
+      if (!tErr && tStdout) {
+        if (/CPU_Speed_Limit\s*=\s*([0-9]+)/.test(tStdout)) {
+          const limit = parseInt(tStdout.match(/CPU_Speed_Limit\s*=\s*([0-9]+)/)![1], 10);
+          if (limit < 90) {
+            cachedThermalWarning = "🔥THRM";
+            return;
+          }
+        }
+        if (/Thermal_Warning_Level\s*=\s*(Moderate|Heavy|Critical)/i.test(tStdout)) {
+          cachedThermalWarning = "🔥HOT";
+          return;
+        }
+      }
+      cachedThermalWarning = "";
+    });
   });
 }
 
-// Initial async sample
-updateWiredMemoryAsync();
+// Initial async telemetry sample
+updateTelemetryAsync();
 
 const FRACTIONAL_BLOCKS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
 
 /**
  * Render a high-precision Unicode shaded bar with 8 sub-character steps per cell.
- * Width of 8 cells provides 64 distinct resolution steps.
  */
 function renderDetailedBar(ratio: number, width = 8, emptyChar = "░"): string {
   const clamped = Math.max(0, Math.min(1, isNaN(ratio) ? 0 : ratio));
@@ -78,13 +98,17 @@ function formatTokens(tokens: number): string {
 }
 
 export default function statusBarExtension(pi: ExtensionAPI) {
-  // Live Decode Speed Tracking State
+  // Live Decode Speed & Turn Duration Tracking State
   let isGenerating = false;
   let turnStartTime = 0;
   let turnTokensGenerated = 0;
   let currentLiveTokS = 0;
   let lastTurnAvgTokS: number | null = null;
   let requestRenderFn: (() => void) | null = null;
+
+  // Bell Alert Settings
+  const enableBell = process.env.PI_ENABLE_BELL !== "0";
+  const bellThresholdS = Number(process.env.PI_BELL_THRESHOLD_S || 15);
 
   pi.on("turn_start", async () => {
     isGenerating = true;
@@ -126,6 +150,11 @@ export default function statusBarExtension(pi: ExtensionAPI) {
       } else if (currentLiveTokS > 0) {
         lastTurnAvgTokS = currentLiveTokS;
       }
+
+      // Terminal bell notification for long turns (>15s)
+      if (enableBell && elapsedS >= bellThresholdS) {
+        process.stderr.write("\x07");
+      }
     }
     isGenerating = false;
     currentLiveTokS = 0;
@@ -143,9 +172,9 @@ export default function statusBarExtension(pi: ExtensionAPI) {
       requestRenderFn = () => tui.requestRender();
       const unsubBranch = footerData.onBranchChange(() => tui.requestRender());
 
-      // Periodic timer for live memory tracking (every 2.5s, non-blocking)
+      // Periodic timer for live telemetry tracking (every 2.5s, non-blocking)
       const intervalTimer = setInterval(() => {
-        updateWiredMemoryAsync();
+        updateTelemetryAsync();
         tui.requestRender();
       }, 2500);
 
@@ -174,7 +203,7 @@ export default function statusBarExtension(pi: ExtensionAPI) {
             }
           }
 
-          const currentTokens = promptTokens + completionTokens;
+          const currentTokens = promptTokens + completionTokens + (isGenerating ? turnTokensGenerated : 0);
           const maxContext = ctx.model?.contextWindow || 65536;
           const ctxRatio = currentTokens / maxContext;
           const ctxPercent = Math.round(ctxRatio * 100);
@@ -191,39 +220,57 @@ export default function statusBarExtension(pi: ExtensionAPI) {
             return theme.fg("accent", barStr);
           };
 
-          // 3. Format RAM Segment (High contrast, bold label)
-          const ramBar = getBarColored(memRatio, renderDetailedBar(memRatio, 8, "░"));
-          const ramText = theme.bold("RAM ") + ramBar + " " + `${formatBytesGB(wiredBytes)}/${formatBytesGB(TOTAL_MEM_BYTES)} (${memPercent}%)`;
+          // Dynamic sizing based on terminal column width
+          const isCompact = width < 95;
+          const isUltraCompact = width < 75;
+          const barWidth = isUltraCompact ? 4 : isCompact ? 6 : 8;
 
-          // 4. Format CTX Segment (High contrast, bold label)
-          const ctxBar = getBarColored(ctxRatio, renderDetailedBar(ctxRatio, 8, "░"));
-          const ctxText = theme.bold("CTX ") + ctxBar + " " + `${formatTokens(currentTokens)}/${formatTokens(maxContext)} (${ctxPercent}%)`;
+          // 3. Format RAM Segment (with optional thermal warning tag)
+          const ramBar = getBarColored(memRatio, renderDetailedBar(memRatio, barWidth, "░"));
+          const thrmTag = cachedThermalWarning ? " " + theme.fg("warning", cachedThermalWarning) : "";
+          const ramDetails = isUltraCompact
+            ? `${memPercent}%`
+            : isCompact
+              ? `${Math.round(wiredBytes / (1024 * 1024 * 1024))}G (${memPercent}%)${thrmTag}`
+              : `${formatBytesGB(wiredBytes)}/${formatBytesGB(TOTAL_MEM_BYTES)} (${memPercent}%)${thrmTag}`;
+          const ramText = theme.bold("RAM ") + ramBar + " " + ramDetails;
 
-          // 5. Format Live / Average Decode Speed Segment using candidate #2 (↯)
+          // 4. Format CTX Segment
+          const ctxBar = getBarColored(ctxRatio, renderDetailedBar(ctxRatio, barWidth, "░"));
+          const ctxDetails = isUltraCompact
+            ? `${ctxPercent}%`
+            : isCompact
+              ? `${formatTokens(currentTokens)} (${ctxPercent}%)`
+              : `${formatTokens(currentTokens)}/${formatTokens(maxContext)} (${ctxPercent}%)`;
+          const ctxText = theme.bold("CTX ") + ctxBar + " " + ctxDetails;
+
+          // 5. Format Live / Average Decode Speed Segment using ↯
           let speedStr = "";
           if (isGenerating) {
             const liveVal = currentLiveTokS > 0 ? currentLiveTokS.toFixed(1) : "--.-";
-            speedStr = theme.bold(theme.fg("accent", `↯ ${liveVal} tok/s`));
+            speedStr = theme.bold(theme.fg("accent", `↯ ${liveVal} t/s`));
           } else if (lastTurnAvgTokS !== null && lastTurnAvgTokS > 0) {
-            speedStr = theme.bold(`↯ ${lastTurnAvgTokS.toFixed(1)} tok/s`);
+            speedStr = theme.bold(`↯ ${lastTurnAvgTokS.toFixed(1)} t/s`);
           } else {
-            speedStr = theme.fg("dim", `↯ --.- tok/s`);
+            speedStr = theme.fg("dim", `↯ --.- t/s`);
           }
 
-          // 6. Format Model & Git Segment (Concise, no overflow/truncation)
+          // 6. Format Model & Git Segment (Responsive: adapts to remaining width)
           const gitBranch = footerData.getGitBranch();
-          const gitStr = gitBranch ? theme.fg("dim", ` (${gitBranch})`) : "";
+          const gitStr = !isCompact && gitBranch ? theme.fg("dim", ` (${gitBranch})`) : "";
           const rawModelId = ctx.model?.id || "";
-          let modelLabel = "Flash-Next (65k)";
+          let modelLabel = isCompact ? "Flash-Next" : "Flash-Next (65k)";
           if (rawModelId && !rawModelId.includes("flash-next") && !rawModelId.includes("qwen")) {
-            modelLabel = rawModelId.length > 18 ? `${rawModelId.slice(0, 16)}..` : rawModelId;
+            modelLabel = rawModelId.length > 14 ? `${rawModelId.slice(0, 12)}..` : rawModelId;
           }
-          const modelStr = theme.bold(modelLabel) + gitStr;
+          const modelStr = isUltraCompact ? "" : theme.bold(modelLabel) + gitStr;
 
           const sep = theme.fg("dim", " │ ");
 
           // Compose Single Line
-          const fullLine = `${ramText}${sep}${ctxText}${sep}${speedStr}${sep}${modelStr}`;
+          const fullLine = modelStr
+            ? `${ramText}${sep}${ctxText}${sep}${speedStr}${sep}${modelStr}`
+            : `${ramText}${sep}${ctxText}${sep}${speedStr}`;
 
           // Pad or truncate to exact width, guaranteed 1 row height
           const vWidth = visibleWidth(fullLine);

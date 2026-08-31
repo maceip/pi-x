@@ -2,6 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR}/config.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/config.env"
+fi
 if [[ -f "${SCRIPT_DIR}/lib/preflight.sh" ]]; then
     # shellcheck disable=SC1091
     source "${SCRIPT_DIR}/lib/preflight.sh"

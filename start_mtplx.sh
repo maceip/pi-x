@@ -4,6 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PI_X_ROOT="${SCRIPT_DIR}"
 
+# 1. Load Unified Configuration
+if [[ -f "${SCRIPT_DIR}/config.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/config.env"
+fi
+
+# 2. Run Preflight Discovery
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/preflight.sh"
 if [[ -z "${MODEL_PATH:-}" || -z "${MTPLX_BIN:-}" ]]; then
@@ -15,8 +22,29 @@ HOST="${MTPLX_HOST:-127.0.0.1}"
 LOG_DIR="${SCRIPT_DIR}/logs"
 LOG_FILE="${LOG_DIR}/mtplx.log"
 PID_FILE="${LOG_DIR}/mtplx.pid"
+MAX_LOG_MB="${PI_MAX_LOG_SIZE_MB:-50}"
 
 mkdir -p "${LOG_DIR}"
+
+# Automated Log Rotation: Rotate log if larger than MAX_LOG_MB or if previous session log exists
+rotate_logs() {
+    if [[ -f "${LOG_FILE}" ]]; then
+        local size_bytes=0
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            size_bytes="$(stat -f%z "${LOG_FILE}" 2>/dev/null || echo 0)"
+        else
+            size_bytes="$(stat -c%s "${LOG_FILE}" 2>/dev/null || echo 0)"
+        fi
+        local max_bytes=$((MAX_LOG_MB * 1024 * 1024))
+        if (( size_bytes > max_bytes )); then
+            echo " [MTPLX] Log file exceeds ${MAX_LOG_MB}MB (${size_bytes} bytes). Rotating logs..."
+            mv -f "${LOG_FILE}.1" "${LOG_FILE}.2" 2>/dev/null || true
+            mv -f "${LOG_FILE}" "${LOG_FILE}.1" 2>/dev/null || true
+            touch "${LOG_FILE}"
+        fi
+    fi
+}
+rotate_logs
 
 if curl -s "http://${HOST}:${PORT}/health" >/dev/null 2>&1 || curl -s "http://${HOST}:${PORT}/v1/models" >/dev/null 2>&1; then
     echo " [MTPLX] Server is already running and healthy on http://${HOST}:${PORT}"
@@ -32,7 +60,8 @@ fi
 echo " [MTPLX] Launching model on port ${PORT}..."
 echo " [MTPLX] Binary: ${MTPLX_BIN} (${MTPLX_SOURCE}, v${MTPLX_VERSION:-unknown})"
 echo " [MTPLX] Model: ${MODEL_PATH}"
-echo " [MTPLX] Configured Context Depth: 65,536 tokens"
+echo " [MTPLX] Context Window: ${MTPLX_CONTEXT_WINDOW:-65536} tokens | MTP Depth: ${MTPLX_MTP_DEPTH:-3}"
+echo " [MTPLX] SSD Cache: ${MTPLX_SSD_SESSION_CACHE:-off} | Reasoning: ${MTPLX_REASONING:-on} (${MTPLX_REASONING_EFFORT:-high})"
 
 export MTPLX_QWEN4EXP_COMPILE="${MTPLX_QWEN4EXP_COMPILE:-1}"
 export MTPLX_COMPILED_GDN="${MTPLX_COMPILED_GDN:-1}"
@@ -51,6 +80,7 @@ export MTPLX_SYNC_AR="${MTPLX_SYNC_AR:-0}"
 export MTPLX_NGRAM_RESIDENT="${MTPLX_NGRAM_RESIDENT:-0}"
 export MTPLX_ENGINE_RAM_FRACTION="${MTPLX_ENGINE_RAM_FRACTION:-0.90}"
 export MTPLX_ALLOW_OVERCOMMITTED="${MTPLX_ALLOW_OVERCOMMITTED:-1}"
+export MTPLX_MTP_HISTORY_POLICY="${MTPLX_MTP_HISTORY_POLICY:-committed}"
 
 if [[ "${MTPLX_SOURCE:-}" == "python-module" ]]; then
     set -- python3 -m mtplx serve
@@ -60,14 +90,17 @@ fi
 
 nohup "$@" \
     --model "${MODEL_PATH}" \
+    --model-id "${MTPLX_MODEL_ID:-mtplx-flash-next-optimized-speed}" \
     --host "${HOST}" \
     --port "${PORT}" \
-    --context-window 65536 \
-    --profile turbo \
-    --reasoning on \
-    --reasoning-parser qwen3 \
-    --reasoning-effort high \
-    --ssd-session-cache off \
+    --context-window "${MTPLX_CONTEXT_WINDOW:-65536}" \
+    --profile "${MTPLX_PROFILE:-turbo}" \
+    --depth "${MTPLX_MTP_DEPTH:-3}" \
+    --reasoning "${MTPLX_REASONING:-on}" \
+    --reasoning-parser "${MTPLX_REASONING_PARSER:-qwen3}" \
+    --reasoning-effort "${MTPLX_REASONING_EFFORT:-high}" \
+    --ssd-session-cache "${MTPLX_SSD_SESSION_CACHE:-off}" \
+    --ssd-session-cache-min-prefix-tokens "${MTPLX_SSD_MIN_PREFIX_TOKENS:-512}" \
     --no-auth \
     --unsafe-force-unverified \
     --yes \

@@ -2,6 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR}/config.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/config.env"
+fi
 PORT="${MTPLX_PORT:-8000}"
 PID_FILE="${SCRIPT_DIR}/logs/mtplx.pid"
 
