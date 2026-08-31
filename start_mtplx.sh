@@ -59,7 +59,7 @@ nohup "${CMD[@]}" \
     --reasoning "${MTPLX_REASONING:-off}" \
     --reasoning-parser "${MTPLX_REASONING_PARSER:-qwen3}" \
     --reasoning-effort "${MTPLX_REASONING_EFFORT:-low}" \
-    --ssd-session-cache "${MTPLX_SSD_SESSION_CACHE:-off}" \
+    --ssd-session-cache "${MTPLX_SSD_SESSION_CACHE:-on}" \
     --ssd-session-cache-min-prefix-tokens "${MTPLX_SSD_MIN_PREFIX_TOKENS:-512}" \
     --no-auth --unsafe-force-unverified --yes \
     </dev/null > "${LOG_FILE}" 2>&1 &
