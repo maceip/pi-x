@@ -1,58 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Portable Pi CLI wrapper. Never hardcode a developer machine PATH.
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${SCRIPT_DIR}/lib/preflight.sh" ]]; then
-    # shellcheck disable=SC1091
     source "${SCRIPT_DIR}/lib/preflight.sh"
     pi_x_bootstrap_path
 fi
 
-resolve_pi_bin() {
-    local cand
+resolve_pi() {
     if [[ -n "${PI_BIN:-}" && -x "${PI_BIN}" ]]; then
-        printf '%s\n' "${PI_BIN}"
+        echo "${PI_BIN}"
         return 0
     fi
-
-    # Prefer a real `pi` on PATH that is not this wrapper.
-    if cand="$(command -v pi 2>/dev/null || true)"; then
-        local resolved self
-        resolved="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$cand" 2>/dev/null || echo "$cand")"
-        self="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$0" 2>/dev/null || echo "$0")"
-        if [[ "$resolved" != "$self" && "$cand" != "${SCRIPT_DIR}/pi" ]]; then
-            printf '%s\n' "$cand"
+    
+    local cand
+    cand="$(command -v pi 2>/dev/null || true)"
+    if [[ -n "$cand" ]]; then
+        local r1 r2
+        r1="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$cand" 2>/dev/null || echo "$cand")"
+        r2="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$0" 2>/dev/null || echo "$0")"
+        if [[ "$r1" != "$r2" && "$cand" != "${SCRIPT_DIR}/pi" ]]; then
+            echo "$cand"
             return 0
         fi
     fi
 
-    # Common global npm prefixes
-    for cand in \
-        "$(npm prefix -g 2>/dev/null)/bin/pi" \
-        "${HOME}/.npm-global/bin/pi" \
-        /opt/homebrew/bin/pi \
-        /usr/local/bin/pi; do
-        if [[ -n "$cand" && -x "$cand" ]]; then
-            printf '%s\n' "$cand"
+    for p in "$(npm prefix -g 2>/dev/null)/bin/pi" "${HOME}/.npm-global/bin/pi" /opt/homebrew/bin/pi /usr/local/bin/pi; do
+        if [[ -n "$p" && -x "$p" ]]; then
+            echo "$p"
             return 0
         fi
     done
     return 1
 }
 
-PI_REAL="$(resolve_pi_bin || true)"
-if [[ -z "${PI_REAL}" ]]; then
-    if command -v npx >/dev/null 2>&1; then
-        exec npx --yes @earendil-works/pi-coding-agent "$@"
-    fi
-    echo "Error: Pi CLI not found." >&2
-    echo "Install it with:" >&2
-    echo "  npm install -g --ignore-scripts @earendil-works/pi-coding-agent" >&2
-    echo "or:" >&2
-    echo "  curl -fsSL https://pi.dev/install.sh | sh" >&2
+PI_EXEC="$(resolve_pi || true)"
+if [[ -n "$PI_EXEC" ]]; then
+    exec "$PI_EXEC" "$@"
+elif command -v npx >/dev/null 2>&1; then
+    exec npx --yes @earendil-works/pi-coding-agent "$@"
+else
+    echo "Error: Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent" >&2
     exit 1
 fi
-
-exec "${PI_REAL}" "$@"
