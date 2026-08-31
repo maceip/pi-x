@@ -1,6 +1,6 @@
 /**
  * Custom Single-Row Status Bar Extension for Pi Agent
- * Renders live RAM, CTX, decode tok/s (↯), thermal alerts (🔥THRM), and git branch.
+ * Live RAM, CTX, decode speed (↯), thermal alerts (🔥THRM), and git branch.
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -9,168 +9,122 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import * as os from "node:os";
 
-const TOTAL_MEM_BYTES = os.totalmem() || 128 * 1024 * 1024 * 1024;
-const PAGE_SIZE_BYTES = 16384;
-const FRACTIONAL_BLOCKS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+const TOTAL_MEM = os.totalmem() || 128 * 1073741824;
+const BLOCKS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+let cachedWired = 0, cachedThrm = "", isPolling = false;
 
-let cachedWiredBytes = 0;
-let cachedThermalWarning = "";
-let isPollingTelemetry = false;
-
-function updateTelemetryAsync() {
-  if (isPollingTelemetry) return;
-  isPollingTelemetry = true;
-
-  execFile("vm_stat", [], { timeout: 1500 }, (_, stdout) => {
-    if (stdout) {
-      const match = stdout.match(/Pages wired down:\s+(\d+)\./);
-      if (match) cachedWiredBytes = parseInt(match[1], 10) * PAGE_SIZE_BYTES;
-    }
-    execFile("pmset", ["-g", "therm"], { timeout: 1500 }, (_, tStdout) => {
-      isPollingTelemetry = false;
-      if (tStdout) {
-        const limitMatch = tStdout.match(/CPU_Speed_Limit\s*=\s*([0-9]+)/);
-        if (limitMatch && parseInt(limitMatch[1], 10) < 90) {
-          cachedThermalWarning = "🔥THRM";
-          return;
-        }
-        if (/Thermal_Warning_Level\s*=\s*(Moderate|Heavy|Critical)/i.test(tStdout)) {
-          cachedThermalWarning = "🔥HOT";
-          return;
-        }
+function updateTelemetry() {
+  if (isPolling) return;
+  isPolling = true;
+  execFile("vm_stat", [], { timeout: 1500 }, (_, out) => {
+    if (out) { const m = out.match(/Pages wired down:\s+(\d+)\./); if (m) cachedWired = parseInt(m[1], 10) * 16384; }
+    execFile("pmset", ["-g", "therm"], { timeout: 1500 }, (_, t) => {
+      isPolling = false;
+      if (t) {
+        const lim = t.match(/CPU_Speed_Limit\s*=\s*([0-9]+)/);
+        if (lim && parseInt(lim[1], 10) < 90) { cachedThrm = "🔥THRM"; return; }
+        if (/Thermal_Warning_Level\s*=\s*(Moderate|Heavy|Critical)/i.test(t)) { cachedThrm = "🔥HOT"; return; }
       }
-      cachedThermalWarning = "";
+      cachedThrm = "";
     });
   });
 }
-updateTelemetryAsync();
+updateTelemetry();
 
-function renderDetailedBar(ratio: number, width = 8, emptyChar = "░"): string {
-  const totalEighths = Math.round(Math.max(0, Math.min(1, isNaN(ratio) ? 0 : ratio)) * width * 8);
-  const fullBlocks = Math.floor(totalEighths / 8);
-  const rem = totalEighths % 8;
-  const bar = "█".repeat(fullBlocks) + (rem > 0 ? FRACTIONAL_BLOCKS[rem] : "");
-  return bar + emptyChar.repeat(Math.max(0, width - fullBlocks - (rem > 0 ? 1 : 0)));
+function renderBar(ratio: number, width = 8): string {
+  const eighths = Math.round(Math.max(0, Math.min(1, isNaN(ratio) ? 0 : ratio)) * width * 8);
+  const full = Math.floor(eighths / 8), rem = eighths % 8;
+  return "█".repeat(full) + (rem > 0 ? BLOCKS[rem] : "") + "░".repeat(Math.max(0, width - full - (rem > 0 ? 1 : 0)));
 }
 
-const fmtGB = (bytes: number) => `${(bytes / 1073741824).toFixed(1)}G`;
-const fmtTokens = (tokens: number) => tokens < 1000 ? `${tokens}` : `${(tokens / 1000).toFixed(1)}k`;
+const fmtGB = (b: number) => `${(b / 1073741824).toFixed(1)}G`;
+const fmtTok = (t: number) => t < 1000 ? `${t}` : `${(t / 1000).toFixed(1)}k`;
 
 export default function statusBarExtension(pi: ExtensionAPI) {
-  let isGenerating = false, turnStartTime = 0, turnTokensGenerated = 0, currentLiveTokS = 0;
-  let lastTurnAvgTokS: number | null = null, requestRenderFn: (() => void) | null = null;
-  const enableBell = process.env.PI_ENABLE_BELL !== "0";
-  const bellThresholdS = Number(process.env.PI_BELL_THRESHOLD_S || 15);
+  let isGen = false, tStart = 0, tTok = 0, liveTokS = 0, lastAvgTokS: number | null = null, rerender: (() => void) | null = null;
+  const bell = process.env.PI_ENABLE_BELL !== "0", bellThresh = Number(process.env.PI_BELL_THRESHOLD_S || 15);
+  const reset = () => { isGen = false; liveTokS = 0; rerender?.(); };
 
-  const resetGen = () => { isGenerating = false; currentLiveTokS = 0; requestRenderFn?.(); };
-
-  pi.on("turn_start", async () => {
-    isGenerating = true; turnStartTime = Date.now(); turnTokensGenerated = 0; currentLiveTokS = 0;
-    requestRenderFn?.();
-  });
-
-  pi.on("message_update", async (event) => {
-    if (!isGenerating) { isGenerating = true; if (turnStartTime === 0) turnStartTime = Date.now(); }
-    const evt = event.assistantMessageEvent;
-    if (evt && (evt.type === "text_delta" || evt.type === "thinking_delta")) {
-      turnTokensGenerated += Math.max(1, Math.round((evt.delta?.length || 0) / 3.8));
-      const elapsedS = (Date.now() - turnStartTime) / 1000;
-      if (elapsedS > 0.1) currentLiveTokS = turnTokensGenerated / elapsedS;
-      requestRenderFn?.();
+  pi.on("turn_start", async () => { isGen = true; tStart = Date.now(); tTok = 0; liveTokS = 0; rerender?.(); });
+  pi.on("message_update", async (e) => {
+    if (!isGen) { isGen = true; if (!tStart) tStart = Date.now(); }
+    const ev = e.assistantMessageEvent;
+    if (ev && (ev.type === "text_delta" || ev.type === "thinking_delta")) {
+      tTok += Math.max(1, Math.round((ev.delta?.length || 0) / 3.8));
+      const s = (Date.now() - tStart) / 1000;
+      if (s > 0.1) liveTokS = tTok / s;
+      rerender?.();
     }
   });
-
-  pi.on("message_end", async (event) => {
-    if (event.message.role === "assistant") {
-      const actualTokens = (event.message as AssistantMessage).usage?.output || turnTokensGenerated;
-      const elapsedS = (Date.now() - turnStartTime) / 1000;
-      if (elapsedS > 0.1 && actualTokens > 0) lastTurnAvgTokS = actualTokens / elapsedS;
-      else if (currentLiveTokS > 0) lastTurnAvgTokS = currentLiveTokS;
-      if (enableBell && elapsedS >= bellThresholdS) process.stderr.write("\x07");
+  pi.on("message_end", async (e) => {
+    if (e.message.role === "assistant") {
+      const act = (e.message as AssistantMessage).usage?.output || tTok;
+      const s = (Date.now() - tStart) / 1000;
+      if (s > 0.1 && act > 0) lastAvgTokS = act / s;
+      else if (liveTokS > 0) lastAvgTokS = liveTokS;
+      if (bell && s >= bellThresh) process.stderr.write("\x07");
     }
-    resetGen();
+    reset();
   });
+  pi.on("turn_end", async () => reset());
 
-  pi.on("turn_end", async () => resetGen());
-
-  pi.on("session_start", async (_event, ctx) => {
-    ctx.ui.setFooter((tui, theme, footerData) => {
-      requestRenderFn = () => tui.requestRender();
+  pi.on("session_start", async (_, ctx) => {
+    ctx.ui.setFooter((tui, theme, footer) => {
+      rerender = () => tui.requestRender();
       let unsub = () => {};
-      try {
-        if (footerData && typeof footerData.onBranchChange === "function") {
-          unsub = footerData.onBranchChange(() => tui.requestRender());
-        }
-      } catch { /* non-git fallback */ }
-
-      const timer = setInterval(() => { updateTelemetryAsync(); tui.requestRender(); }, 2500);
+      try { if (typeof footer?.onBranchChange === "function") unsub = footer.onBranchChange(() => tui.requestRender()); } catch {}
+      const timer = setInterval(() => { updateTelemetry(); tui.requestRender(); }, 2500);
 
       return {
-        dispose() { unsub(); clearInterval(timer); requestRenderFn = null; },
+        dispose() { unsub(); clearInterval(timer); rerender = null; },
         invalidate() {},
-        render(width: number): string[] {
-          if (!width || width < 25) return [truncateToWidth(theme.bold("pi-x"), Math.max(1, width))];
+        render(w: number): string[] {
+          if (!w || w < 25) return [truncateToWidth(theme.bold("pi-x"), Math.max(1, w))];
 
-          let promptTokens = 0, completionTokens = 0;
+          let pTok = 0, cTok = 0;
           try {
             const branch = ctx.sessionManager?.getBranch?.() || [];
             for (let i = branch.length - 1; i >= 0; i--) {
               if (branch[i].type === "message" && branch[i].message.role === "assistant") {
                 const u = (branch[i].message as AssistantMessage).usage;
-                if (u) { promptTokens = u.input || 0; completionTokens = u.output || 0; break; }
+                if (u) { pTok = u.input || 0; cTok = u.output || 0; break; }
               }
             }
-          } catch { /* session branch fallback */ }
+          } catch {}
 
-          const currentTokens = promptTokens + completionTokens + (isGenerating ? turnTokensGenerated : 0);
-          const maxContext = ctx.model?.contextWindow || 65536;
-          const ctxRatio = currentTokens / maxContext, ctxPct = Math.round(ctxRatio * 100);
-          const memRatio = cachedWiredBytes / TOTAL_MEM_BYTES, memPct = Math.round(memRatio * 100);
+          const curTok = pTok + cTok + (isGen ? tTok : 0);
+          const maxCtx = ctx.model?.contextWindow || 65536;
+          const cRatio = curTok / maxCtx, cPct = Math.round(cRatio * 100);
+          const mRatio = cachedWired / TOTAL_MEM, mPct = Math.round(mRatio * 100);
+          const color = (r: number, s: string) => r >= 0.88 ? theme.fg("error", s) : r >= 0.7 ? theme.fg("warning", s) : theme.fg("accent", s);
 
-          const getColored = (r: number, s: string) => r >= 0.88 ? theme.fg("error", s) : r >= 0.7 ? theme.fg("warning", s) : theme.fg("accent", s);
-
-          const isCompact = width < 95, isUltra = width < 75, isTiny = width < 50;
+          const isCompact = w < 95, isUltra = w < 75, isTiny = w < 50;
           const barW = isTiny ? 3 : isUltra ? 4 : isCompact ? 6 : 8;
+          const thrm = cachedThrm ? " " + theme.fg("warning", cachedThrm) : "";
 
-          const thrm = cachedThermalWarning ? " " + theme.fg("warning", cachedThermalWarning) : "";
-          const ramDetails = isTiny ? `${memPct}%` : isUltra ? `${memPct}%${thrm}` : isCompact ? `${Math.round(cachedWiredBytes / 1073741824)}G (${memPct}%)${thrm}` : `${fmtGB(cachedWiredBytes)}/${fmtGB(TOTAL_MEM_BYTES)} (${memPct}%)${thrm}`;
-          const ramText = theme.bold("RAM ") + getColored(memRatio, renderDetailedBar(memRatio, barW)) + " " + ramDetails;
+          const ramVal = isTiny ? `${mPct}%` : isUltra ? `${mPct}%${thrm}` : isCompact ? `${Math.round(cachedWired / 1073741824)}G (${mPct}%)${thrm}` : `${fmtGB(cachedWired)}/${fmtGB(TOTAL_MEM)} (${mPct}%)${thrm}`;
+          const ram = theme.bold("RAM ") + color(mRatio, renderBar(mRatio, barW)) + " " + ramVal;
 
-          const ctxDetails = isTiny ? `${ctxPct}%` : isUltra ? `${ctxPct}%` : isCompact ? `${fmtTokens(currentTokens)} (${ctxPct}%)` : `${fmtTokens(currentTokens)}/${fmtTokens(maxContext)} (${ctxPct}%)`;
-          const ctxText = theme.bold("CTX ") + getColored(ctxRatio, renderDetailedBar(ctxRatio, barW)) + " " + ctxDetails;
+          const ctxVal = isTiny ? `${cPct}%` : isUltra ? `${cPct}%` : isCompact ? `${fmtTok(curTok)} (${cPct}%)` : `${fmtTok(curTok)}/${fmtTok(maxCtx)} (${cPct}%)`;
+          const ctxt = theme.bold("CTX ") + color(cRatio, renderBar(cRatio, barW)) + " " + ctxVal;
 
-          const speedVal = isGenerating ? currentLiveTokS : (lastTurnAvgTokS || 0);
-          const speedStr = isGenerating
-            ? theme.bold(theme.fg("accent", `↯ ${speedVal > 0 ? speedVal.toFixed(1) : "--.-"} t/s`))
-            : speedVal > 0
-              ? theme.bold(`↯ ${speedVal.toFixed(1)} t/s`)
-              : theme.fg("dim", `↯ --.- t/s`);
+          const spd = isGen ? liveTokS : (lastAvgTokS || 0);
+          const spdStr = isGen
+            ? theme.bold(theme.fg("accent", `↯ ${spd > 0 ? spd.toFixed(1) : "--.-"} t/s`))
+            : spd > 0 ? theme.bold(`↯ ${spd.toFixed(1)} t/s`) : theme.fg("dim", `↯ --.- t/s`);
 
-          let gitStr = "";
-          try {
-            const gitBranch = footerData?.getGitBranch?.();
-            if (!isCompact && gitBranch) gitStr = theme.fg("dim", ` (${gitBranch})`);
-          } catch { /* git branch not available */ }
+          let git = "";
+          try { const b = footer?.getGitBranch?.(); if (!isCompact && b) git = theme.fg("dim", ` (${b})`); } catch {}
 
-          let modelLabel = isCompact ? "Flash-Next" : "Flash-Next (65k)";
-          const rawId = ctx.model?.id || "";
-          if (rawId && !rawId.includes("flash-next") && !rawId.includes("qwen")) {
-            modelLabel = rawId.length > 14 ? `${rawId.slice(0, 12)}..` : rawId;
-          }
-          const modelStr = isUltra ? "" : theme.bold(modelLabel) + gitStr;
+          let mdl = isCompact ? "Flash-Next" : "Flash-Next (65k)";
+          const id = ctx.model?.id || "";
+          if (id && !id.includes("flash-next") && !id.includes("qwen")) mdl = id.length > 14 ? `${id.slice(0, 12)}..` : id;
+          const mdlStr = isUltra ? "" : theme.bold(mdl) + git;
           const sep = theme.fg("dim", " │ ");
 
-          let fullLine = "";
-          if (isTiny) {
-            fullLine = `${ramText}${sep}${ctxText}`;
-          } else if (modelStr) {
-            fullLine = `${ramText}${sep}${ctxText}${sep}${speedStr}${sep}${modelStr}`;
-          } else {
-            fullLine = `${ramText}${sep}${ctxText}${sep}${speedStr}`;
-          }
-
-          const vW = visibleWidth(fullLine);
-          return [truncateToWidth(vW < width ? fullLine + " ".repeat(width - vW) : fullLine, width)];
+          const line = isTiny ? `${ram}${sep}${ctxt}` : mdlStr ? `${ram}${sep}${ctxt}${sep}${spdStr}${sep}${mdlStr}` : `${ram}${sep}${ctxt}${sep}${spdStr}`;
+          const vW = visibleWidth(line);
+          return [truncateToWidth(vW < w ? line + " ".repeat(w - vW) : line, w)];
         },
       };
     });

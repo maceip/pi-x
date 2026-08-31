@@ -2,55 +2,27 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/lib/preflight.sh" ]]; then
-    source "${SCRIPT_DIR}/lib/preflight.sh"
-    pi_x_bootstrap_path
-fi
+[[ -f "${SCRIPT_DIR}/lib/preflight.sh" ]] && { source "${SCRIPT_DIR}/lib/preflight.sh"; pi_x_bootstrap_path; }
 
 resolve_pi() {
-    if [[ -n "${PI_BIN:-}" && -x "${PI_BIN}" ]]; then
-        echo "${PI_BIN}"
-        return 0
-    fi
-    
-    local cand
-    cand="$(command -v pi 2>/dev/null || true)"
+    [[ -n "${PI_BIN:-}" && -x "${PI_BIN}" ]] && { echo "${PI_BIN}"; return 0; }
+    local cand; cand="$(command -v pi 2>/dev/null || true)"
     if [[ -n "$cand" ]]; then
         local r1 r2
         r1="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$cand" 2>/dev/null || echo "$cand")"
         r2="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$0" 2>/dev/null || echo "$0")"
-        if [[ "$r1" != "$r2" && "$cand" != "${SCRIPT_DIR}/pi" ]]; then
-            echo "$cand"
-            return 0
-        fi
+        [[ "$r1" != "$r2" && "$cand" != "${SCRIPT_DIR}/pi" ]] && { echo "$cand"; return 0; }
     fi
-
-    for p in \
-        "$(npm prefix -g 2>/dev/null || true)/bin/pi" \
-        "${HOME}/.npm-global/bin/pi" \
-        "${HOME}/.bun/bin/pi" \
-        /opt/homebrew/bin/pi \
-        /usr/local/bin/pi; do
-        if [[ -n "$p" && -x "$p" ]]; then
-            echo "$p"
-            return 0
-        fi
+    for p in "$(npm prefix -g 2>/dev/null || true)/bin/pi" "${HOME}/.npm-global/bin/pi" "${HOME}/.bun/bin/pi" /opt/homebrew/bin/pi /usr/local/bin/pi; do
+        [[ -n "$p" && -x "$p" ]] && { echo "$p"; return 0; }
     done
     return 1
 }
 
 PI_EXEC="$(resolve_pi || true)"
-if [[ -n "$PI_EXEC" ]]; then
-    exec "$PI_EXEC" "$@"
-elif command -v npx >/dev/null 2>&1; then
-    exec npx --yes @earendil-works/pi-coding-agent "$@"
-elif command -v bunx >/dev/null 2>&1; then
-    exec bunx @earendil-works/pi-coding-agent "$@"
+if [[ -n "$PI_EXEC" ]]; then exec "$PI_EXEC" "$@"
+elif command -v npx >/dev/null 2>&1; then exec npx --yes @earendil-works/pi-coding-agent "$@"
+elif command -v bunx >/dev/null 2>&1; then exec bunx @earendil-works/pi-coding-agent "$@"
 else
-    echo " [pi-x] ERROR: Node.js / npx not found in PATH." >&2
-    echo " [pi-x] Please install Node.js (or Bun) using your package manager:" >&2
-    echo "        brew install node" >&2
-    echo "        # or: curl -fsSL https://bun.sh/install | bash" >&2
-    echo "        # or: npm install -g @earendil-works/pi-coding-agent" >&2
-    exit 1
+    echo " [pi-x] ERROR: Node.js / npx not found in PATH. Install via: brew install node" >&2; exit 1
 fi

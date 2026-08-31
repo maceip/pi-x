@@ -1,23 +1,20 @@
 /**
  * Web Tools Extension for Pi Agent
- * Registers web_search (DuckDuckGo keyless, Tavily, Brave, Wikipedia) & web_fetch (HTML to Markdown).
+ * Registers web_search (DuckDuckGo keyless + Wikipedia fallback) & web_fetch (HTML to Markdown).
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-function decodeEntities(s: string): string {
+const decode = (s: string) => s.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-z]+);/gi, (m, c) => {
+  if (c.startsWith("#x")) return String.fromCharCode(parseInt(c.slice(2), 16));
+  if (c.startsWith("#")) return String.fromCharCode(parseInt(c.slice(1), 10));
   const map: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
-  return s
-    .replace(/&(#x[0-9a-fA-F]+|#\d+|[a-z]+);/gi, (match, code) => {
-      if (code.startsWith("#x")) return String.fromCharCode(parseInt(code.slice(2), 16));
-      if (code.startsWith("#")) return String.fromCharCode(parseInt(code.slice(1), 10));
-      return map[code.toLowerCase()] || match;
-    });
-}
+  return map[c.toLowerCase()] || m;
+});
 
 function htmlToMarkdown(html: string): string {
-  let clean = html
+  const clean = html
     .replace(/<(head|script|style|svg|noscript|iframe|nav|footer)[^>]*>[\s\S]*?<\/\1>/gi, "")
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, (_, lvl, t) => `\n${"#".repeat(Number(lvl))} ${t}\n`)
@@ -30,62 +27,40 @@ function htmlToMarkdown(html: string): string {
     .replace(/<hr\s*\/?>/gi, "\n---\n")
     .replace(/<[^>]+>/g, " ");
 
-  return decodeEntities(clean)
-    .split("\n")
-    .map(l => l.trim())
-    .filter((l, i, arr) => l !== "" || arr[i - 1] !== "")
-    .join("\n")
-    .trim();
+  return decode(clean).split("\n").map(l => l.trim()).filter((l, i, arr) => l !== "" || arr[i - 1] !== "").join("\n").trim();
 }
 
 interface SearchResult { title: string; url: string; snippet: string; }
 
 async function searchDuckDuckGo(query: string, limit: number, signal?: AbortSignal): Promise<SearchResult[]> {
-  const timeoutSig = AbortSignal.timeout(10000);
-  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSig]) : timeoutSig;
-
+  const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000);
   const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    signal: combinedSignal,
+    headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/126.0.0.0 Safari/537.36" },
+    signal: sig,
   });
+  if (resp.status === 202 || resp.status === 403 || resp.status === 429) throw new Error("DDG rate limited");
+  if (!resp.ok) throw new Error(`DDG HTTP ${resp.status}`);
 
-  if (resp.status === 202 || resp.status === 403 || resp.status === 429) {
-    throw new Error("DuckDuckGo rate limit or anti-bot challenge encountered");
-  }
-  if (!resp.ok) throw new Error(`DuckDuckGo HTTP ${resp.status}`);
-
-  const html = await resp.text();
-  const results: SearchResult[] = [];
-  const blocks = html.split(/<div\s+class="[^"]*result\s+results_links[^"]*"[^>]*>/i).slice(1);
-
-  for (const block of blocks) {
+  const html = await resp.text(), results: SearchResult[] = [];
+  for (const block of html.split(/<div\s+class="[^"]*result\s+results_links[^"]*"[^>]*>/i).slice(1)) {
     if (results.length >= limit) break;
-    const hMatch = block.match(/<a\s+class="result__title"[^>]*>([\s\S]*?)<\/a>/i) ||
-                  block.match(/<h2[^>]*class="result__title"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
-    const sMatch = block.match(/<a\s+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i) ||
-                  block.match(/<div\s+class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
-    let url = hMatch ? hMatch[1] : "";
+    const h = block.match(/<a\s+class="result__title"[^>]*>([\s\S]*?)<\/a>/i) || block.match(/<h2[^>]*class="result__title"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    const s = block.match(/<a\s+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i) || block.match(/<div\s+class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
+    let url = h ? h[1] : "";
     if (url.includes("uddg=")) url = decodeURIComponent(url.match(/uddg=([^&]+)/)?.[1] || url);
     else if (url.startsWith("//")) url = "https:" + url;
-
-    const title = decodeEntities((hMatch ? (hMatch[2] || hMatch[1]) : "").replace(/<[^>]+>/g, "").trim());
-    const snippet = decodeEntities((sMatch ? sMatch[1] : "").replace(/<[^>]+>/g, "").trim());
+    const title = decode((h ? (h[2] || h[1]) : "").replace(/<[^>]+>/g, "").trim());
+    const snippet = decode((s ? s[1] : "").replace(/<[^>]+>/g, "").trim());
     if (title && url) results.push({ title, url, snippet });
   }
   return results;
 }
 
 async function searchWikipediaFallback(query: string, limit: number, signal?: AbortSignal): Promise<SearchResult[]> {
-  const url = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=${limit}&namespace=0&format=json`;
-  const resp = await fetch(url, { signal: signal || AbortSignal.timeout(8000) });
+  const resp = await fetch(`https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=${limit}&format=json`, { signal: signal || AbortSignal.timeout(8000) });
   if (!resp.ok) return [];
   const data = (await resp.json()) as [string, string[], string[], string[]];
-  const titles = data[1] || [], snippets = data[2] || [], urls = data[3] || [];
-  return titles.map((title, i) => ({ title, snippet: snippets[i] || "", url: urls[i] || "" }));
+  return (data[1] || []).map((t, i) => ({ title: t, snippet: data[2]?.[i] || "", url: data[3]?.[i] || "" }));
 }
 
 export default function webToolsExtension(pi: ExtensionAPI) {
@@ -98,31 +73,16 @@ export default function webToolsExtension(pi: ExtensionAPI) {
       limit: Type.Optional(Type.Number({ description: "Max results (default: 6, max: 15)" })),
     }),
     async execute(_id, params, signal) {
-      const query = params.query.trim();
-      const limit = Math.min(Math.max(params.limit || 6, 1), 15);
-      if (!query) return { content: [{ type: "text", text: "Error: Query cannot be empty." }] };
-
-      let results: SearchResult[] = [];
-      let provider = "DuckDuckGo";
-
-      try {
-        results = await searchDuckDuckGo(query, limit, signal);
-      } catch (err: any) {
-        try {
-          results = await searchWikipediaFallback(query, limit, signal);
-          provider = "Wikipedia Fallback";
-        } catch { /* ignore fallback error */ }
-
-        if (results.length === 0) {
-          return { content: [{ type: "text", text: `Search unavailable (${err.message}). Proceed using internal model knowledge or specific URLs with web_fetch.` }] };
-        }
+      const q = params.query.trim(), limit = Math.min(Math.max(params.limit || 6, 1), 15);
+      if (!q) return { content: [{ type: "text", text: "Error: Query cannot be empty." }] };
+      let results: SearchResult[] = [], provider = "DuckDuckGo";
+      try { results = await searchDuckDuckGo(q, limit, signal); }
+      catch (err: any) {
+        try { results = await searchWikipediaFallback(q, limit, signal); provider = "Wikipedia Fallback"; } catch {}
+        if (!results.length) return { content: [{ type: "text", text: `Search unavailable (${err.message}). Proceed using internal model knowledge or specific URLs with web_fetch.` }] };
       }
-
-      if (results.length === 0) return { content: [{ type: "text", text: `No results found for "${query}".` }] };
-
-      const text = `### Web Search Results (${provider}) for "${query}"\n\n` + results.map((r, i) =>
-        `**${i + 1}. [${r.title}](${r.url})**\n${r.snippet}\n`
-      ).join("\n");
+      if (!results.length) return { content: [{ type: "text", text: `No results found for "${q}".` }] };
+      const text = `### Web Search Results (${provider}) for "${q}"\n\n` + results.map((r, i) => `**${i + 1}. [${r.title}](${r.url})**\n${r.snippet}\n`).join("\n");
       return { content: [{ type: "text", text }] };
     },
   });
@@ -136,28 +96,15 @@ export default function webToolsExtension(pi: ExtensionAPI) {
       max_chars: Type.Optional(Type.Number({ description: "Max characters to return (default: 20000)" })),
     }),
     async execute(_id, params, signal) {
-      const targetUrl = params.url.trim();
-      const maxChars = params.max_chars || 20000;
-      if (!/^https?:\/\//i.test(targetUrl)) return { content: [{ type: "text", text: "Error: URL must begin with http:// or https://" }] };
-
+      const u = params.url.trim(), max = params.max_chars || 20000;
+      if (!/^https?:\/\//i.test(u)) return { content: [{ type: "text", text: "Error: URL must begin with http:// or https://" }] };
       try {
-        const timeoutSig = AbortSignal.timeout(15000);
-        const combinedSignal = signal ? AbortSignal.any([signal, timeoutSig]) : timeoutSig;
-
-        const resp = await fetch(targetUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          },
-          signal: combinedSignal,
-        });
+        const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000);
+        const resp = await fetch(u, { headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/126.0.0.0 Safari/537.36" }, signal: sig });
         if (!resp.ok) return { content: [{ type: "text", text: `HTTP error ${resp.status}: ${resp.statusText}` }] };
         const md = htmlToMarkdown(await resp.text());
-        const truncated = md.length > maxChars ? md.slice(0, maxChars) + "\n\n*(Content truncated...)*" : md;
-        return { content: [{ type: "text", text: `### Content from ${targetUrl}\n\n${truncated}` }] };
-      } catch (err: any) {
-        return { content: [{ type: "text", text: `Fetch failed: ${err.message}` }] };
-      }
+        return { content: [{ type: "text", text: `### Content from ${u}\n\n${md.length > max ? md.slice(0, max) + "\n\n*(Truncated...)*" : md}` }] };
+      } catch (err: any) { return { content: [{ type: "text", text: `Fetch failed: ${err.message}` }] }; }
     },
   });
 }
