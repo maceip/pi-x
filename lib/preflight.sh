@@ -11,13 +11,9 @@ pi_x_err() { printf ' [pi-x] %s\n' "$*" >&2; }
 
 pi_x_ask() {
     local prompt="$1" reply=""
-    if [[ -r /dev/tty ]]; then
-        printf '%s' "$prompt" > /dev/tty && IFS= read -r reply < /dev/tty || true
-    elif [[ -t 0 ]]; then
-        printf '%s' "$prompt" && IFS= read -r reply || true
-    else
-        pi_x_err "Non-interactive shell cannot answer: ${prompt}"; return 1
-    fi
+    if [[ -r /dev/tty ]]; then printf '%s' "$prompt" > /dev/tty && IFS= read -r reply < /dev/tty || true
+    elif [[ -t 0 ]]; then printf '%s' "$prompt" && IFS= read -r reply || true
+    else pi_x_err "Non-interactive shell cannot answer: ${prompt}"; return 1; fi
     [[ "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]' | xargs)" =~ ^(y|yes)$ ]]
 }
 
@@ -45,59 +41,56 @@ pi_x_require_ram() {
 }
 
 pi_x_prepend_path() {
-    if [[ -n "$1" && -d "$1" && ":${PATH}:" != *":${1}:"* ]]; then
-        export PATH="${1}:${PATH}"
-    fi
+    if [[ -n "$1" && -d "$1" && ":${PATH}:" != *":${1}:"* ]]; then export PATH="${1}:${PATH}"; fi
 }
 
 pi_x_bootstrap_path() {
-    local dirs=(
+    local d p nvm_latest dirs=(
         "${HOME}/.local/bin" "/opt/homebrew/bin" "/usr/local/bin" "${HOME}/.bun/bin" "${HOME}/.volta/bin"
         "${HOME}/.asdf/shims" "${HOME}/.asdf/bin" "${HOME}/.local/share/mise/shims" "${HOME}/.local/share/mise/bin"
         "${HOME}/.proto/shims" "${HOME}/.proto/bin" "${HOME}/.local/share/fnm/current/bin" "${HOME}/.fnm/current/bin"
     )
     for d in "${dirs[@]}"; do pi_x_prepend_path "$d"; done
-    for p in /opt/homebrew/opt/node*/bin /usr/local/opt/node*/bin; do
-        if [[ -d "$p" ]]; then pi_x_prepend_path "$p"; fi
-    done
+    for p in /opt/homebrew/opt/node*/bin /usr/local/opt/node*/bin; do [[ -d "$p" ]] && pi_x_prepend_path "$p"; done
     if [[ -d "${HOME}/.nvm/versions/node" ]]; then
-        local nvm_latest; nvm_latest="$(ls -1d "${HOME}/.nvm/versions/node"/v* 2>/dev/null | sort -V | tail -n 1 || true)"
-        if [[ -n "$nvm_latest" ]]; then pi_x_prepend_path "${nvm_latest}/bin"; fi
+        nvm_latest="$(ls -1d "${HOME}/.nvm/versions/node"/v* 2>/dev/null | sort -V | tail -n 1 || true)"
+        [[ -n "$nvm_latest" ]] && pi_x_prepend_path "${nvm_latest}/bin"
     fi
 }
 
 pi_x_mtplx_version_of() {
-    local bin="$1" ver=""
+    local bin="$1" ver="" py=""
     ver="$("$bin" --version 2>/dev/null | grep -Eo '[0-9]+(\.[0-9]+)+' | head -n 1 || true)"
-    if [[ -z "$ver" && -x "$(dirname "$bin")/python" ]]; then
-        ver="$("$(dirname "$bin")/python" -c "import importlib.metadata as m; print(m.version('mtplx'))" 2>/dev/null || true)"
+    py="$(dirname "$bin")/python"
+    if [[ -z "$ver" && -x "$py" ]]; then
+        ver="$("$py" -c "import importlib.metadata as m; print(m.version('mtplx'))" 2>/dev/null || true)"
     fi
     printf '%s\n' "$ver"
 }
 
 pi_x_discover_mtplx() {
-    MTPLX_BIN="" MTPLX_VERSION="" MTPLX_SOURCE=""
-    HAS_UV="$(command -v uv >/dev/null 2>&1 && echo yes || echo no)"
-    local roots=(
+    local r cand tool_dir roots=(
         "${HOME}/.venv" "${HOME}/venv" "${HOME}/.mtplx/venv" "${HOME}/.mtplx/.venv"
         "${HOME}/mtplx/.venv" "${HOME}/MTPLX/.venv" "${HOME}/.local/share/uv/tools/mtplx"
         "${UV_PROJECT_ENVIRONMENT:-}"
     )
-    if [[ "$HAS_UV" == "yes" ]]; then roots+=("$(uv tool dir 2>/dev/null || true)/mtplx"); fi
+    MTPLX_BIN="" MTPLX_VERSION="" MTPLX_SOURCE=""
+    HAS_UV="$(command -v uv >/dev/null 2>&1 && echo yes || echo no)"
+    if [[ "$HAS_UV" == "yes" ]]; then
+        tool_dir="$(uv tool dir 2>/dev/null || true)"
+        [[ -n "$tool_dir" ]] && roots+=("${tool_dir}/mtplx")
+    fi
 
     for r in "${roots[@]}"; do
         if [[ -n "$r" && -d "$r" ]]; then
             for cand in "${r}/bin/mtplx" "${r}/.venv/bin/mtplx" "${r}/venv/bin/mtplx"; do
-                if [[ -x "$cand" ]]; then
-                    MTPLX_BIN="$cand"; MTPLX_SOURCE="venv:${r}"; break 2
-                fi
+                if [[ -x "$cand" ]]; then MTPLX_BIN="$cand"; MTPLX_SOURCE="venv:${r}"; break 2; fi
             done
         fi
     done
 
     if [[ -z "$MTPLX_BIN" ]]; then
-        if command -v mtplx >/dev/null 2>&1; then
-            MTPLX_BIN="$(command -v mtplx)"; MTPLX_SOURCE="path"
+        if command -v mtplx >/dev/null 2>&1; then MTPLX_BIN="$(command -v mtplx)"; MTPLX_SOURCE="path"
         elif python3 -c "import importlib.util; exit(0 if importlib.util.find_spec('mtplx') else 1)" 2>/dev/null; then
             MTPLX_BIN="$(command -v python3)"; MTPLX_SOURCE="python-module"
         fi
@@ -152,9 +145,9 @@ pi_x_dir_looks_like_model() {
 }
 
 pi_x_model_config_is_compatible() {
-    local cfg="${1}/config.json"
+    local cfg="${1}/config.json" t="" a=""
     if [[ ! -f "$cfg" ]]; then return 1; fi
-    local t a; t="$(grep -Eo '"model_type"\s*:\s*"[^"]+"' "$cfg" 2>/dev/null | cut -d'"' -f4 | tr '[:upper:]' '[:lower:]' || true)"
+    t="$(grep -Eo '"model_type"\s*:\s*"[^"]+"' "$cfg" 2>/dev/null | cut -d'"' -f4 | tr '[:upper:]' '[:lower:]' || true)"
     a="$(grep -Eo '"architectures"\s*:\s*\[\s*"[^"]+"' "$cfg" 2>/dev/null | cut -d'"' -f4 | tr '[:upper:]' '[:lower:]' || true)"
     [[ "$t" =~ (qwen4_exp|qwen3_8|qwen3\.8|qwen3_6|qwen2_5|qwen2) || "$a" =~ (qwen3_8|qwen4exp|qwen2) ]]
 }
@@ -168,14 +161,12 @@ pi_x_name_is_flash_next_4bit() {
 
 pi_x_discover_model() {
     if [[ -n "${MODEL_PATH:-}" && -d "$MODEL_PATH" ]]; then return 0; fi
-    local roots=(
+    local ext root child snap line maybe slug cached roots=(
         "${HOME}/models" "${HOME}/Models" "${HOME}/.mtplx/models"
         "${HF_HOME:-${HOME}/.cache/huggingface}/hub" "${HF_HUB_CACHE:-}"
         "${XDG_CACHE_HOME:-${HOME}/.cache}/huggingface/hub" "${PI_X_ROOT:-}/models" "${PWD}/models"
     )
-    for ext in /Volumes/*/models /Volumes/*/cache/huggingface/hub; do
-        if [[ -d "$ext" ]]; then roots+=("$ext"); fi
-    done
+    for ext in /Volumes/*/models /Volumes/*/cache/huggingface/hub; do [[ -d "$ext" ]] && roots+=("$ext"); done
 
     for root in "${roots[@]}"; do
         if [[ -n "$root" && -d "$root" ]]; then
@@ -195,10 +186,10 @@ pi_x_discover_model() {
     if [[ -n "${MTPLX_BIN:-}" ]]; then
         while IFS= read -r line; do
             if pi_x_name_is_flash_next_4bit "$line"; then
-                local maybe; maybe="$(printf '%s' "$line" | awk '{print $NF}')"
+                maybe="$(printf '%s' "$line" | awk '{print $NF}')"
                 if [[ -d "$maybe" ]]; then MODEL_PATH="$maybe"; return 0; fi
-                local slug; slug="$(printf '%s' "$line" | grep -Eo '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' | head -n 1 || true)"
-                local cached="${HOME}/.mtplx/models/${slug//\//--}"
+                slug="$(printf '%s' "$line" | grep -Eo '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' | head -n 1 || true)"
+                cached="${HOME}/.mtplx/models/${slug//\//--}"
                 if [[ -n "$slug" && -d "$cached" ]]; then MODEL_PATH="$cached"; return 0; fi
             fi
         done <<< "$("${MTPLX_BIN}" models 2>/dev/null || true)"
@@ -207,14 +198,13 @@ pi_x_discover_model() {
 }
 
 pi_x_download_fallback_model() {
-    local dest="${HOME}/.mtplx/models/${PI_X_FALLBACK_MODEL_REPO//\//--}"
+    local dest="${HOME}/.mtplx/models/${PI_X_FALLBACK_MODEL_REPO//\//--}" py="python3"
     mkdir -p "$(dirname "$dest")"; pi_x_log "Downloading ${PI_X_FALLBACK_MODEL_REPO} -> ${dest}"
     if [[ -n "${MTPLX_BIN:-}" ]] && "${MTPLX_BIN}" pull --help >/dev/null 2>&1; then
         "${MTPLX_BIN}" pull "$PI_X_FALLBACK_MODEL_REPO"
         if pi_x_dir_looks_like_model "$dest"; then MODEL_PATH="$dest"; return 0; fi
         if pi_x_discover_model; then return 0; fi
     fi
-    local py="python3"
     if [[ -n "${MTPLX_BIN:-}" && -x "$(dirname "$MTPLX_BIN")/python" ]]; then py="$(dirname "$MTPLX_BIN")/python"; fi
     mkdir -p "$dest"
     $py - "$PI_X_FALLBACK_MODEL_REPO" "$dest" <<'PY'

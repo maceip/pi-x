@@ -31,6 +31,10 @@ function updateTelemetry() {
 }
 updateTelemetry();
 
+const getUsage = (m: unknown): { input?: number; output?: number } | undefined =>
+  m && typeof m === "object" && "role" in m && (m as { role: string }).role === "assistant" && "usage" in m
+    ? (m as AssistantMessage).usage : undefined;
+
 function renderBar(ratio: number, width = 8): string {
   const eighths = Math.round(Math.max(0, Math.min(1, isNaN(ratio) ? 0 : ratio)) * width * 8);
   const full = Math.floor(eighths / 8), rem = eighths % 8;
@@ -57,8 +61,9 @@ export default function statusBarExtension(pi: ExtensionAPI) {
     }
   });
   pi.on("message_end", async (e) => {
-    if (e.message.role === "assistant") {
-      const act = (e.message as AssistantMessage).usage?.output || tTok;
+    const u = getUsage(e.message);
+    if (u !== undefined) {
+      const act = u?.output || tTok;
       const s = (Date.now() - tStart) / 1000;
       if (s > 0.1 && act > 0) lastAvgTokS = act / s;
       else if (liveTokS > 0) lastAvgTokS = liveTokS;
@@ -85,8 +90,9 @@ export default function statusBarExtension(pi: ExtensionAPI) {
           try {
             const branch = ctx.sessionManager?.getBranch?.() || [];
             for (let i = branch.length - 1; i >= 0; i--) {
-              if (branch[i].type === "message" && branch[i].message.role === "assistant") {
-                const u = (branch[i].message as AssistantMessage).usage;
+              const node = branch[i];
+              if (node.type === "message") {
+                const u = getUsage(node.message);
                 if (u) { pTok = u.input || 0; cTok = u.output || 0; break; }
               }
             }
