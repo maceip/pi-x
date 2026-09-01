@@ -3,7 +3,7 @@
 # Sourced by run_agent.sh, start_mtplx.sh, and test_pi_setup.sh.
 
 : "${PI_X_MIN_RAM_GB:=80}"
-: "${PI_X_MIN_MTPLX:=2.10.1}"
+: "${PI_X_MIN_MTPLX:=2.10.2}"
 : "${PI_X_FALLBACK_MODEL_REPO:=Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed}"
 
 pi_x_log() { printf ' [pi-x] %s\n' "$*"; }

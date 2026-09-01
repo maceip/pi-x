@@ -27,7 +27,7 @@ Measured live on Apple Silicon (M5 Max 128GB) running real autonomous multi-turn
 
 ## What We Added & Changed
 
-- **Metal Acceleration & Turbo Runtime:** Configured the MTPLX backend with Stage-1 `mx.compile`, double-buffered async token decode (`MTPLX_SYNC_AR=0`), pipelined AR, and optimal unified memory allocation for Apple Silicon.
+- **Metal Acceleration & Turbo Runtime:** Configured the MTPLX 2.10.2 backend with Stage-1 `mx.compile`, double-buffered async token decode (`MTPLX_ASYNC_AR=1`), pipelined AR, proactive memory admission shedding, and optimal unified memory allocation for Apple Silicon.
 - **High-Precision Single-Row Status Rail:** Added a custom TUI extension that renders live Wired RAM, context usage (65.5k cap), real-time generation speed (`tok/s`), and background thermal telemetry using Unicode fractional blocks without taking extra vertical screen space.
 - **Autonomous Tooling & Keyless Web Search:** Integrated local filesystem tools (`read`, `write`, `edit`, `bash`, `grep`, `find`) with multi-provider web search (DuckDuckGo keyless scraper / Tavily / Brave) and token-budgeted HTML-to-Markdown web fetch.
 - **Specialized Engineering Skills:** Added modular agent skills for strict TypeScript architecture, D3.js v7+ visualization pipelines (`selection.join`, transitions), and browser/Canvas application engineering.
@@ -40,7 +40,7 @@ Measured live on Apple Silicon (M5 Max 128GB) running real autonomous multi-turn
 This harness is built for large unified-memory Apple Silicon machines:
 
 - **More than 80GB total RAM** (the launcher exits politely below that)
-- **mtplx 2.10.1+** (discovered from a homedir `uv` venv first, then from system Python)
+- **mtplx 2.10.2+** (discovered from a homedir `uv` venv first, then from system Python)
 - A **4-bit Qwen 3.8 Flash-Next** checkpoint, or the published speed fallback below
 
 ## Quick Start
@@ -56,7 +56,7 @@ That command will:
 1. Clone this repo to `~/pi-x` if you are not already inside a checkout
 2. Refuse to continue on machines with 80GB of RAM or less
 3. Find `uv` and look for `mtplx` in a homedir uv venv; otherwise use a system/python `mtplx`
-4. Offer to install or upgrade `mtplx` if it is missing or older than **2.10.1**
+4. Offer to install or upgrade `mtplx` if it is missing or older than **2.10.2**
 5. Search for a local 4-bit Qwen 3.8 Flash-Next model
 6. If none is found, offer to download [`Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed`](https://huggingface.co/Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed) with a progress bar
 7. Start MTPLX with the discovered or downloaded model and drop you into the Pi TUI
