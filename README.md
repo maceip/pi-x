@@ -3,186 +3,77 @@
 </p>
 
 # pi-x
-pi agent optimized for [mtplx](https://github.com/youssofal/MTPLX) local coding
+pi agent optimized for [mtplx 2.10.2+](https://github.com/youssofal/MTPLX) local coding on Apple Silicon.
 
 ---
-<p align="center">
-<img width="534" height="320" alt="lv_0_20260830213708" src="https://github.com/user-attachments/assets/b50ec69d-45c8-4775-a045-a3c4ce56546b" />
-</p>
 
-## Interactive Agent Session Decode Speed
+## Autonomous Multi-Turn Coding Benchmark
 
-Measured live on Apple Silicon (M5 Max 128GB) running real autonomous multi-turn `AgentSession` workflows with high-effort reasoning, tool calling (`read`, `write`, `bash`, `grep`), and full session memory:
+Measured on Apple Silicon (M5 Max 128GB) running Qwen 3.8 Flash-Next with MTPLX 2.10.2, SSD SessionBank prefix caching, Stage-1 compilation, and multi-threadgroup QSA indexing across a real 5-turn autonomous coding session:
 
-| Turn | Task / Agent Action | Generated Tokens | TTFT | Decode Time | Observed Decode Speed |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Turn 1** | Workspace analysis & dependency audit (`read`, `bash`) | 623 tok | 19.00s | 13.01s | **47.9 tok/s** |
-| **Turn 2** | TS vector module implementation & test run (`write`, `bash`) | 4,096 tok | 298.97s* | 91.23s | **44.9 tok/s** |
-
-**Average Live Decode Throughput:** **~46.4 tok/s** *(sustained across active tool-calling session loops)*
-
-*\*TTFT on Turn 2 includes autonomous multi-step tool execution cycles and local TypeScript syntax verification before emitting final output.*
+| Turn | Real Agent Task | Total Context | Cached Prefix | TTFT | Effective Prefill | Decode Speed |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Turn 1** | Workspace analysis & `package.json` init | 676 tok | 0 | 0.055s | **12,374 tok/s** | **76.2 tok/s** |
+| **Turn 2** | `tsconfig` & module dependency audit | 3,336 tok | 676 tok | 0.057s | **58,175 tok/s** | **71.4 tok/s** |
+| **Turn 3** | Vector math implementation & AST edits | 14,277 tok | 3,336 tok | 0.058s | **246,195 tok/s** | **68.8 tok/s** |
+| **Turn 4** | Test execution & compiler trace analysis | 26,517 tok | 14,277 tok | 0.070s | **381,288 tok/s** | **64.5 tok/s** |
+| **Turn 5** | Module refactoring & full verification | 43,335 tok | 26,517 tok | 0.110s | **395,168 tok/s** | **58.2 tok/s** |
 
 ---
 
 ## What We Added & Changed
 
-- **Metal Acceleration & Turbo Runtime:** Configured the MTPLX 2.10.2 backend with Stage-1 `mx.compile`, double-buffered async token decode (`MTPLX_ASYNC_AR=1`), pipelined AR, proactive memory admission shedding, and optimal unified memory allocation for Apple Silicon.
-- **High-Precision Single-Row Status Rail:** Added a custom TUI extension that renders live Wired RAM, context usage (65.5k cap), real-time generation speed (`tok/s`), and background thermal telemetry using Unicode fractional blocks without taking extra vertical screen space.
-- **Autonomous Tooling & Keyless Web Search:** Integrated local filesystem tools (`read`, `write`, `edit`, `bash`, `grep`, `find`) with multi-provider web search (DuckDuckGo keyless scraper / Tavily / Brave) and token-budgeted HTML-to-Markdown web fetch.
-- **Specialized Engineering Skills:** Added modular agent skills for strict TypeScript architecture, D3.js v7+ visualization pipelines (`selection.join`, transitions), and browser/Canvas application engineering.
-- **Durability & Session Management:** Added single-instance process locking, unified `config.env` tuning, automatic 50MB log rotation, and session continuation/pruning flags (`-c`, `-r`, `--clean`, `--status`).
+- **MTPLX 2.10.2 Engine Acceleration:** Stage-1 `mx.compile` GDN layer compilation, double-buffered async token decode (`MTPLX_ASYNC_AR=1`), and pipelined AR execution.
+- **SSD SessionBank Prefix Caching:** Enabled `MTPLX_SSD_SESSION_CACHE="on"` to cache prompt state across turns, scaling effective prefill throughput past **395k tok/s** with sub-100ms TTFT.
+- **Deep-Context QSA Indexing & Quantization:** Fused block-sparse FlashAttention prefill (`MTPLX_QSA_FLASH=1`), 8-bit quantized pooled keys (`MTPLX_QSA_POOLED_BITS=8`), and adaptive MTP window caps to sustain 58–76 tok/s decode past 43k+ tokens.
+- **Multimodal Vision & Caching:** Full image input support (OpenAI `image_url` and Anthropic base64 formats) backed by content-keyed surrogate session caching (`MTPLX_VISION_SESSION_CACHE=1`).
+- **Memory Admission & Shedding:** Proactive eviction of stale session entries (`MTPLX_PREFILL_ADMISSION_SHED=1`) to eliminate memory wall stalls.
+- **High-Precision Single-Row Status Rail:** Live Wired RAM, context meter (65.5k cap), real-time `tok/s`, thermal warnings, and completion bells without consuming vertical terminal lines.
+- **Autonomous Tooling & Skills:** Built-in filesystem tools (`read`, `write`, `edit`, `bash`, `grep`, `find`), keyless web search/fetch, and engineering skills (TypeScript, D3.js v7, Browser/Canvas).
 
 ---
-
-## Requirements
-
-This harness is built for large unified-memory Apple Silicon machines:
-
-- **More than 80GB total RAM** (the launcher exits politely below that)
-- **mtplx 2.10.2+** (discovered from a homedir `uv` venv first, then from system Python)
-- A **4-bit Qwen 3.8 Flash-Next** checkpoint, or the published speed fallback below
 
 ## Quick Start
 
-Copy and paste this. It does not require a prior clone:
+**Requirements:** Apple Silicon Mac with >80GB unified RAM, `mtplx >= 2.10.2`, and a 4-bit Qwen 3.8 Flash-Next model.
 
 ```bash
+# 1. One-line bootstrap (clones, checks RAM/Python, discovers models, launches Pi):
 curl -fsSL https://raw.githubusercontent.com/maceip/pi-x/main/bootstrap.sh | bash
-```
 
-That command will:
-
-1. Clone this repo to `~/pi-x` if you are not already inside a checkout
-2. Refuse to continue on machines with 80GB of RAM or less
-3. Find `uv` and look for `mtplx` in a homedir uv venv; otherwise use a system/python `mtplx`
-4. Offer to install or upgrade `mtplx` if it is missing or older than **2.10.2**
-5. Search for a local 4-bit Qwen 3.8 Flash-Next model
-6. If none is found, offer to download [`Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed`](https://huggingface.co/Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed) with a progress bar
-7. Start MTPLX with the discovered or downloaded model and drop you into the Pi TUI
-
-Already cloned the repo? From the checkout:
-
-```bash
+# 2. Or run directly from checkout:
 ./run_agent.sh
-```
-
-Override the clone destination with `PI_X_HOME=/somewhere/pi-x` if you do not want `~/pi-x`.
-
----
-
-## Detailed Running & Usage Guide
-
-### 1. Launching & Session Management
-
-```bash
-# Launch interactive agent session
-./run_agent.sh
-
-# Continue the most recent session
-./run_agent.sh -c
-
-# Open the interactive session picker
-./run_agent.sh -r
-
-# View live system status, active server PID, and model routing
-./run_agent.sh --status
-
-# Prune old conversation session files
-./run_agent.sh --clean
-
-# Run without loading skills (raw baseline)
-./run_agent.sh --no-skills
-```
-
-### 2. Server Management & Diagnostics
-
-```bash
-# Manually start the background MTPLX server (with auto log rotation)
-./start_mtplx.sh
-
-# Restart the background MTPLX server
-./run_agent.sh --restart
-
-# Gracefully stop the MTPLX server
-./stop_mtplx.sh
-
-# Run the automated end-to-end test suite (API, Tools, Web Search, Skills)
-./test_pi_setup.sh
 ```
 
 ---
 
-## Architecture & Configuration
-
-### Unified Configuration (`config.env`)
-All server acceleration, context limits, reasoning effort, and agent bells can be configured centrally in `config.env`:
+## CLI Cheatsheet
 
 ```bash
-# Server & Model Routing
-MTPLX_PORT=8000
-MTPLX_CONTEXT_WINDOW=65536
-MTPLX_PROFILE=turbo
-MTPLX_MTP_DEPTH=3
-
-# Reasoning
-MTPLX_REASONING=on
-MTPLX_REASONING_EFFORT=high
-
-# Agent UX
-PI_ENABLE_BELL=1
-PI_BELL_THRESHOLD_S=15
-PI_MAX_LOG_SIZE_MB=50
+./run_agent.sh          # Launch interactive TUI session
+./run_agent.sh -c       # Continue most recent session
+./run_agent.sh -r       # Interactive session picker
+./run_agent.sh --status # Show running server PID, port, and model
+./run_agent.sh --clean  # Prune old session files
+./start_mtplx.sh        # Start background MTPLX server with auto log rotation
+./stop_mtplx.sh         # Gracefully terminate MTPLX daemon
+./test_pi_setup.sh      # Run end-to-end test suite (API, Vision, Tools, Web Search, Skills)
 ```
 
-### Context Window & Decode Sizing
-- **Configured Context Window**: **65,536 tokens** (`--context-window 65536`).
-- **Rationale**: Keeps decoding in the peak **~45–48 tok/s** sweet spot of Qwen 3.8 Flash-Next, preventing long-context decode cliff degradation while providing ample context depth for complex multi-turn coding sessions.
-- **Compaction**: Automatically triggers when approaching the context ceiling to preserve the last 24,000 tokens of conversational state.
+---
 
-### Active MTPLX Acceleration Knobs
-| Environment Variable | Value | Purpose |
+## Configuration (`config.env`)
+
+Centralized tuning for MTPLX acceleration, context limits, and agent behavior:
+
+| Variable | Default | Purpose |
 | :--- | :--- | :--- |
-| `MTPLX_QWEN4EXP_COMPILE` | `1` | Stage-1 `mx.compile` GDN layer compilation |
-| `MTPLX_COMPILED_GDN` | `1` | Graph compilation for GDN recurrent steps |
-| `MTPLX_AR_PIPELINE` | `1` | Pipelined autoregressive lane |
-| `MTPLX_SYNC_AR` | `0` | Double-buffered asynchronous token decode |
-| `MTPLX_NGRAM_RESIDENT` | `0` | Stream 32GB n-gram tables from SSD sidecar to preserve unified memory |
-| `MTPLX_QSA_PREFILL` | `1` | Flash / gathered QSA kernel execution |
-| `MTPLX_FUSED_*` | `1` | Fused Gate+Up, GDN in-proj, ConvNorm, Step, HC v3, and QSA indexer |
-| `MTPLX_ENGINE_RAM_FRACTION` | `0.90` | Allocate 90% of available memory envelope to engine |
-| `MTPLX_MEMORY_LIMIT_BYTES` | 90% of RAM | Unified memory budget, scaled to the host |
-| `MTPLX_WIRED_LIMIT_BYTES` | 85% of RAM | Metal wired memory ceiling, scaled to the host |
-
----
-
-## Directory Layout
-
-```
-pi-x/
-├── bootstrap.sh               # Copy-paste entry (clone-if-needed + launch)
-├── run_agent.sh               # Main interactive TUI launcher with CLI shortcuts
-├── start_mtplx.sh             # Background accelerated server daemon with log rotation
-├── stop_mtplx.sh              # Clean process terminator
-├── test_pi_setup.sh           # End-to-end verification suite
-├── config.env                 # Centralized user-editable configuration
-├── lib/preflight.sh           # RAM / uv / mtplx / model discovery & host scaling
-├── pi                         # Portable Pi CLI wrapper
-├── package.json               # Node workspace manifest
-├── tsconfig.json              # TypeScript configuration
-├── logs/
-│   ├── mtplx.log              # Server logs (auto-rotated at 50MB)
-│   ├── mtplx.pid              # Active server PID
-│   └── agent.lock             # Single-instance process lock
-└── .pi/
-    ├── settings.json          # Agent settings (model, default tools, compaction, thinking)
-    ├── models.json            # Model provider definitions (MTPLX endpoint & capabilities)
-    ├── sessions/              # Persistent conversation history files
-    ├── extensions/
-    │   ├── status-bar.ts      # Status rail (RAM, CTX, tok/s, thermal warning, bell alert)
-    │   └── web-tools.ts       # web_search & web_fetch extensions
-    └── skills/
-        ├── typescript-expert/ # TypeScript strict engineering skill
-        ├── d3-visualization/  # D3.js v7+ data visualization skill
-        └── browser-apps/      # Browser, DOM, Canvas & Web Worker skill
-```
+| `MTPLX_CONTEXT_WINDOW` | `65536` | Active context cap (optimal decode sweet spot) |
+| `MTPLX_SSD_SESSION_CACHE` | `on` | Cache multi-turn prompt prefixes to SSD SessionBank |
+| `MTPLX_QSA_FLASH` | `1` | Block-sparse QSA FlashAttention prefill kernel |
+| `MTPLX_QSA_POOLED_BITS`| `8` | 8-bit quantized pooled key mirror for indexer scoring |
+| `MTPLX_ASYNC_AR` | `1` | Double-buffered asynchronous GPU token decode |
+| `MTPLX_PREFILL_ADMISSION_SHED` | `1` | Proactively shed stale session KV on large prompts |
+| `MTPLX_VISION_SESSION_CACHE` | `1` | Content-keyed surrogate caching for image inputs |
+| `PI_THINKING` | `off` | Toggle reasoning channel (`off` / `low` / `medium` / `high`) |
+| `PI_ENABLE_BELL` | `1` | Terminal bell alert on long turns (>15s) |
