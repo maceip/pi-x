@@ -16,7 +16,7 @@ async function isHealthy(): Promise<boolean> {
 }
 
 async function testModelCompletion(): Promise<boolean> {
-  console.log("  [1/4] Testing direct MTPLX API chat completion...");
+  console.log("  [1/5] Testing direct MTPLX API chat completion...");
   try {
     const res = await fetch(`${MTPLX_URL}/v1/chat/completions`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -34,8 +34,36 @@ async function testModelCompletion(): Promise<boolean> {
   } catch (e: any) { console.error(`    Direct API error: ${e.message}`); return false; }
 }
 
+async function testVisionCompletion(): Promise<boolean> {
+  console.log("  [2/5] Testing direct MTPLX API multimodal image completion...");
+  try {
+    const png_1x1_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const res = await fetch(`${MTPLX_URL}/v1/chat/completions`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: process.env.MTPLX_SERVED_MODEL || PI_MODEL,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What color is this 1x1 image? Answer concisely." },
+              { type: "image_url", image_url: { url: `data:image/png;base64,${png_1x1_b64}` } },
+            ],
+          },
+        ],
+        max_tokens: 32, temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = (await res.json()) as any;
+    const text = data.choices?.[0]?.message?.content || "";
+    console.log(`    Response: ${text.trim()}`);
+    return text.length > 0;
+  } catch (e: any) { console.error(`    Direct Vision API error: ${e.message}`); return false; }
+}
+
 function runPi(label: string, step: number, args: string, timeoutMs = 60000): boolean {
-  console.log(`  [${step}/4] ${label}...`);
+  console.log(`  [${step}/5] ${label}...`);
   try {
     const out = execSync(`${PI_BIN} --provider mtplx --model ${PI_MODEL} ${args}`, { cwd: ROOT, encoding: "utf8", timeout: timeoutMs, env: { ...process.env } }).trim();
     console.log(`    Output: ${out}`);
@@ -52,12 +80,13 @@ async function main() {
 
   const results = [
     await testModelCompletion(),
-    runPi("Testing Pi Agent CLI execution & reasoning", 2, "--thinking high -p 'Reply with exactly: PI_AGENT_ONLINE'"),
-    runPi("Testing Web Search & Fetch extension in Pi", 3, "-p 'Use web_search to find information about D3.js v7 and summarize in one sentence.'", 90000),
-    runPi("Verifying Skills discovery in Pi", 4, "-p 'What skills are loaded? Answer with the skill names.'"),
+    await testVisionCompletion(),
+    runPi("Testing Pi Agent CLI execution & reasoning", 3, "--thinking high -p 'Reply with exactly: PI_AGENT_ONLINE'"),
+    runPi("Testing Web Search & Fetch extension in Pi", 4, "-p 'Use web_search to find information about D3.js v7 and summarize in one sentence.'", 90000),
+    runPi("Verifying Skills discovery in Pi", 5, "-p 'What skills are loaded? Answer with the skill names.'"),
   ];
 
-  const labels = ["MTPLX Direct API", "Pi CLI + High Reasoning", "Web Search & Fetch Tool", "Skills Discovery"];
+  const labels = ["MTPLX Direct API", "MTPLX Multimodal Vision API", "Pi CLI + High Reasoning", "Web Search & Fetch Tool", "Skills Discovery"];
   console.log("\n=== Test Results Summary ===");
   labels.forEach((l, i) => console.log(`  ${i + 1}. ${l}: ${results[i] ? "PASS" : "FAIL"}`));
   process.exit(results.every(Boolean) ? 0 : 1);
